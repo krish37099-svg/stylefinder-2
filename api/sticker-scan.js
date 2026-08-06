@@ -291,7 +291,8 @@ export default async function handler(req, res) {
       skipped,
       noImage: [...new Set([...noImage, ...stillNoImage])],
       remainingUnknown,
-      scanWarning
+      scanWarning,
+      _engine: 'ocr-text-match-v1'
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
