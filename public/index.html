@@ -244,6 +244,7 @@
       </label>
       <input type="file" id="stFileInput" accept=".xlsx,.xls,.csv" style="display:none;">
       <div id="stUploadStatus"></div>
+      <div class="link-btn" id="stResetLink">Wrong groupings from before? Reset sticker matches &amp; rescan everything</div>
     </div>
 
     <div class="step" id="stStepGroups" style="display:none;">
@@ -831,11 +832,14 @@ const stStatGroups = document.getElementById('stStatGroups');
 const stStatOrders = document.getElementById('stStatOrders');
 const stStatQty = document.getElementById('stStatQty');
 const stBackLink = document.getElementById('stBackLink');
+const stResetLink = document.getElementById('stResetLink');
 const stDetailTitle = document.getElementById('stDetailTitle');
 const stDetailArea = document.getElementById('stDetailArea');
 const stDetailBackLink = document.getElementById('stDetailBackLink');
 
 let stLastGroups = [];
+let stLastItems = null;
+let stPendingReset = false;
 
 function setStUploadStatus(msg, kind){
   if(!msg){ stUploadStatus.innerHTML = ''; return; }
@@ -865,7 +869,10 @@ stFileInput.addEventListener('change', async () => {
       return;
     }
     const items = parsedOrders.map(o => ({ styleCode: o.styleCode, age: o.ageDisplay, qty: o.qty }));
-    await runStickerScan(items);
+    stLastItems = items;
+    const doReset = stPendingReset;
+    stPendingReset = false;
+    await runStickerScan(items, doReset);
   } catch(err){
     setStUploadStatus('Failed: ' + err.message, 'error');
   } finally {
@@ -873,12 +880,22 @@ stFileInput.addEventListener('change', async () => {
   }
 });
 
-async function runStickerScan(items){
+stResetLink.addEventListener('click', async () => {
+  if(!confirm('This clears every sticker match learned so far (for all style codes, not just this sheet) and re-scans from scratch. Continue?')) return;
+  if(stLastItems){
+    await runStickerScan(stLastItems, true);
+  } else {
+    stPendingReset = true;
+    stFileInput.click();
+  }
+});
+
+async function runStickerScan(items, resetCache){
   let round = 1;
   let result = null;
   while(round <= 15){
     setStUploadStatus(`Scanning images for stickers… (pass ${round}${round>1 ? ', matching remaining style codes':''})`, 'loading');
-    result = await callApi('/api/sticker-scan', { items });
+    result = await callApi('/api/sticker-scan', { items, resetCache: resetCache && round === 1 });
     if(!result.remainingUnknown || result.remainingUnknown <= 0) break;
     round++;
   }
@@ -916,6 +933,7 @@ function renderStGroups(result){
   const skippedCount = (result.skipped || []).length;
   const noImage = result.noImage || [];
   let note = '';
+  if(result.scanWarning) note += `<div class="stk-note" style="color:var(--red);">${result.scanWarning}</div>`;
   if(skippedCount > 0) note += `<div class="stk-note"><b>${skippedCount}</b> readymade line(s) (style code not starting "BLP") skipped — no sticker needed.</div>`;
   if(noImage.length > 0) note += `<div class="stk-note"><b>${noImage.length}</b> style code(s) had no matching image in Drive, so couldn't be grouped: ${noImage.slice(0,12).join(', ')}${noImage.length>12 ? '…' : ''}</div>`;
   stSkippedArea.innerHTML = note;
