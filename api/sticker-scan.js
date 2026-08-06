@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
 import { kv } from '@vercel/kv';
 
-const MAX_UNKNOWN_PER_CALL = 20;   // cap images sent to Gemini in one request
+const MAX_UNKNOWN_PER_CALL = 16;   // cap images sent to Gemini in one request
 const MAX_EXISTING_GROUPS_SHOWN = 20; // cap existing sticker groups shown for comparison
 
 function escapeQuery(s) {
@@ -51,15 +51,91 @@ function needsStickerScan(styleCode) {
   return /^BLP/i.test((styleCode || '').trim());
 }
 
+async function clearStickerCache() {
+  try {
+    const keys = await kv.keys('stickermap:*');
+    if (keys.length > 0) {
+      for (let i = 0; i < keys.length; i += 200) {
+        await Promise.all(keys.slice(i, i + 200).map(k => kv.del(k)));
+      }
+    }
+  } catch (e) { /* best effort */ }
+  await kv.set('stickers:index', []);
+}
+
+const GROUPING_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    matchedToExisting: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          groupIndex: { type: 'INTEGER' },
+          styleCodes: { type: 'ARRAY', items: { type: 'STRING' } }
+        },
+        required: ['groupIndex', 'styleCodes']
+      }
+    },
+    newGroups: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          label: { type: 'STRING' },
+          styleCodes: { type: 'ARRAY', items: { type: 'STRING' } }
+        },
+        required: ['label', 'styleCodes']
+      }
+    }
+  },
+  required: ['matchedToExisting', 'newGroups']
+};
+
+async function callGeminiGrouping(parts) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const body = {
+    contents: [{ parts }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: GROUPING_SCHEMA
+    }
+  };
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const apiRes = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await apiRes.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed.matchedToExisting) || Array.isArray(parsed.newGroups)) return parsed;
+      }
+    } catch (e) {
+      // retry once
+    }
+  }
+  return null; // caller handles the fallback
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { items } = req.body || {};
+    const { items, resetCache } = req.body || {};
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'No order items provided' });
+    }
+
+    if (resetCache) {
+      await clearStickerCache();
     }
 
     const scanItems = items.filter(o => needsStickerScan(o.styleCode));
@@ -85,6 +161,7 @@ export default async function handler(req, res) {
     const noImage = [];
     let stickerIndex = (await kv.get('stickers:index')) || [];
     let remainingUnknown = 0;
+    let scanWarning = null;
 
     if (unknownCodes.length > 0) {
       const drive = await driveClient();
@@ -118,19 +195,23 @@ export default async function handler(req, res) {
           }
         }
 
-        const apiKey = process.env.GEMINI_API_KEY;
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
         const parts = [];
         parts.push({
           text:
-`You are looking at product photos of kids' clothing. Each garment has a printed/pasted graphic "sticker" design on it (a character, motif, or text print). The SAME sticker design gets reused across many different style codes and different garment fabric colors — ignore fabric color and garment type, and compare ONLY the printed graphic/text design.
+`You are comparing product photos of kids' clothing. Each garment has a printed/pasted graphic "sticker" — a character illustration, motif, or text design — applied to it. The exact same sticker artwork is reused across many different style codes and garment colors/types (t-shirt, onesie, romper, all colors) — garment color and garment type are NEVER relevant, ignore them completely.
 
-For each item labeled NEW_ITEM below, decide:
-- If its sticker design matches one of the EXISTING_GROUP images shown, set "groupIndex" to that group's index number and "newLabel" to null.
-- If it does NOT match any EXISTING_GROUP, set "groupIndex" to null and give it a short "newLabel" (3-5 words describing the print, e.g. "Elephant on pastel", "Happy Independence Day baby romper", "Dad Is My Hero text tee"). If two or more NEW_ITEMs in this batch clearly share the same sticker design as each other, give them the EXACT same "newLabel" string (identical characters) so they group together.
+Group items together ONLY if the sticker artwork itself is identical or a straightforward palette recolor of the same artwork: same wording (character-for-character, including any typos), same illustration, same layout/composition. Two designs that are merely similar in theme (e.g. both "Independence Day" themed, both featuring an elephant, both a birthday design) but have DIFFERENT wording or a different illustration are DIFFERENT stickers and must NOT be grouped — e.g. a print reading "My First Independence Day" is a different sticker from one reading "Happy Independence Day", even though both are patriotic prints.
 
-Respond ONLY with JSON: {"assignments": [{"styleCode": "...", "groupIndex": <number or null>, "newLabel": <string or null>}]}`
+You are given:
+- EXISTING_GROUP entries: stickers already catalogued, each with an index number, a label, and (usually) a reference photo.
+- NEW_ITEM entries: newly scanned style codes that need to be placed into a sticker group.
+
+For every NEW_ITEM style code, decide exactly one of:
+(a) it matches an EXISTING_GROUP's artwork — list its styleCode under that group's index in "matchedToExisting"
+(b) it matches one or more OTHER NEW_ITEMs' artwork but no existing group — list all of those styleCodes together under one entry in "newGroups" with a short descriptive label (3-6 words, describe the actual wording/illustration so it's recognizable, e.g. "Happy Independence Day script tee" or "My First Independence Day tricolor brush")
+(c) it matches nothing else — it still goes in "newGroups" as its own single-styleCode entry with a label
+
+Every NEW_ITEM styleCode must appear exactly once, in either matchedToExisting or newGroups.`
         });
 
         existingGroups.forEach((g, i) => {
@@ -144,44 +225,40 @@ Respond ONLY with JSON: {"assignments": [{"styleCode": "...", "groupIndex": <num
           parts.push({ inline_data: { mime_type: item.mimeType, data: item.base64 } });
         });
 
-        const body = {
-          contents: [{ parts }],
-          generationConfig: { responseMimeType: 'application/json' }
-        };
+        const parsed = await callGeminiGrouping(parts);
 
-        let parsed = { assignments: [] };
-        try {
-          const apiRes = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-          });
-          const data = await apiRes.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) parsed = JSON.parse(text);
-        } catch (e) {
-          // fall through — unmatched items handled below become their own groups
+        if (!parsed) {
+          scanWarning = 'The sticker-matching AI call failed — new style codes were each filed as their own separate group this round. Try scanning again.';
         }
 
-        const newLabelToKey = {};
-        for (const a of (parsed.assignments || [])) {
-          const item = unknownImages.find(u => u.styleCode === a.styleCode);
-          if (!item) continue;
-          let stickerKey;
-          if (a.groupIndex !== null && a.groupIndex !== undefined && existingGroups[a.groupIndex]) {
-            stickerKey = existingGroups[a.groupIndex].key;
-          } else if (a.newLabel) {
-            if (!newLabelToKey[a.newLabel]) {
-              const key = `${slugify(a.newLabel)}-${Date.now().toString(36).slice(-4)}-${Math.random().toString(36).slice(2, 5)}`;
-              newLabelToKey[a.newLabel] = key;
-              stickerIndex.unshift({ key, label: a.newLabel, driveFileId: item.fileId, mimeType: item.mimeType });
-            }
-            stickerKey = newLabelToKey[a.newLabel];
+        const seenThisBatch = new Set();
+
+        for (const m of (parsed?.matchedToExisting || [])) {
+          const group = existingGroups[m.groupIndex];
+          if (!group) continue;
+          for (const code of (m.styleCodes || [])) {
+            const item = unknownImages.find(u => u.styleCode === code);
+            if (!item || seenThisBatch.has(code)) continue;
+            knownMap[code] = group.key;
+            seenThisBatch.add(code);
           }
-          if (stickerKey) knownMap[item.styleCode] = stickerKey;
         }
 
-        // Anything the model didn't return an assignment for becomes its own single-code group
+        for (const ng of (parsed?.newGroups || [])) {
+          const codesInGroup = (ng.styleCodes || []).filter(code =>
+            unknownImages.some(u => u.styleCode === code) && !seenThisBatch.has(code)
+          );
+          if (codesInGroup.length === 0) continue;
+          const repItem = unknownImages.find(u => u.styleCode === codesInGroup[0]);
+          const key = `${slugify(ng.label)}-${Date.now().toString(36).slice(-4)}-${Math.random().toString(36).slice(2, 5)}`;
+          stickerIndex.unshift({ key, label: ng.label || repItem.styleCode, driveFileId: repItem.fileId, mimeType: repItem.mimeType });
+          for (const code of codesInGroup) {
+            knownMap[code] = key;
+            seenThisBatch.add(code);
+          }
+        }
+
+        // Anything the model didn't place anywhere (including total call failure) becomes its own solo group
         for (const item of unknownImages) {
           if (!knownMap[item.styleCode]) {
             const key = `unmatched-${item.styleCode.toLowerCase()}`;
@@ -229,7 +306,8 @@ Respond ONLY with JSON: {"assignments": [{"styleCode": "...", "groupIndex": <num
       groups,
       skipped,
       noImage: [...new Set([...noImage, ...stillNoImage])],
-      remainingUnknown
+      remainingUnknown,
+      scanWarning
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
