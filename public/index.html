@@ -127,6 +127,24 @@
 
   .gc-image img, .result-card img{cursor:zoom-in;}
 
+  .stk-card{background:var(--panel-2);border:1px solid var(--line);border-radius:2px;display:flex;gap:12px;padding:10px;cursor:pointer;align-items:center;}
+  .stk-card:active{opacity:.8;}
+  .stk-thumb{width:64px;height:64px;flex-shrink:0;background:#000;border:1px solid var(--line);border-radius:2px;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  .stk-thumb img{max-width:100%;max-height:100%;object-fit:contain;}
+  .stk-info{flex:1;min-width:0;}
+  .stk-label{font-size:13px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .stk-meta{font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:4px;display:flex;gap:12px;}
+  .stk-meta b{color:var(--amber);}
+  .stk-arrow{color:var(--amber);font-family:var(--mono);flex-shrink:0;}
+
+  .stk-row{background:var(--panel-2);border:1px solid var(--line);border-radius:2px;display:flex;gap:10px;padding:10px;margin-bottom:8px;align-items:center;}
+  .stk-row .stk-thumb{width:48px;height:48px;}
+  .stk-row .code{font-family:var(--mono);font-size:12px;color:var(--amber);font-weight:700;}
+  .stk-row .sub{font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:2px;}
+
+  .stk-note{font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:12px;line-height:1.6;}
+  .stk-note b{color:var(--text);}
+
   .lightbox{position:fixed;inset:0;background:rgba(10,11,13,.94);z-index:1000;display:none;align-items:center;justify-content:center;padding:24px;cursor:zoom-out;}
   .lightbox-inner{max-width:100%;max-height:100%;text-align:center;}
   .lightbox-inner img{max-width:100%;max-height:78vh;object-fit:contain;border-radius:4px;}
@@ -146,6 +164,7 @@
   <div class="mode-tabs">
     <button class="mode-tab active" id="tabScan">Scan Invoice</button>
     <button class="mode-tab" id="tabSheet">Order Sheet</button>
+    <button class="mode-tab" id="tabSticker">Stickers</button>
   </div>
 
   <!-- =============== SCAN MODE =============== -->
@@ -213,6 +232,40 @@
 
   </div>
 
+  <!-- =============== STICKER GROUPING MODE =============== -->
+  <div id="stickerMode" style="display:none;">
+
+    <div class="step" id="stStepUpload">
+      <div class="step-label"><span class="num">↑</span> Upload order sheet to scan</div>
+      <label class="upload-box" id="stUploadBox" for="stFileInput">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M12 3v12m0-12l-4 4m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+        <div class="cta">Tap to upload .xlsx or .csv</div>
+        <div class="hint">Fetches the image for every ordered style code and groups them by which sticker/print they share. Style codes starting "BL" (not "BLP") are readymade and skipped — only "BLP…" codes are scanned.</div>
+      </label>
+      <input type="file" id="stFileInput" accept=".xlsx,.xls,.csv" style="display:none;">
+      <div id="stUploadStatus"></div>
+    </div>
+
+    <div class="step" id="stStepGroups" style="display:none;">
+      <div class="step-label"><span class="num">▦</span> <span id="stGroupsTitle">Sticker groups</span></div>
+      <div class="stats-row">
+        <div class="stat-box"><div class="n" id="stStatGroups">0</div><div class="l">Stickers</div></div>
+        <div class="stat-box"><div class="n" id="stStatOrders">0</div><div class="l">Orders</div></div>
+        <div class="stat-box"><div class="n" id="stStatQty">0</div><div class="l">Total Qty</div></div>
+      </div>
+      <div id="stGroupsArea" class="order-grid" style="grid-template-columns:1fr;"></div>
+      <div id="stSkippedArea"></div>
+      <div class="link-btn" id="stBackLink">← Scan a different sheet</div>
+    </div>
+
+    <div class="step" id="stStepDetail" style="display:none;">
+      <div class="step-label"><span class="num">•</span> <span id="stDetailTitle">Sticker</span></div>
+      <div id="stDetailArea"></div>
+      <div class="link-btn" id="stDetailBackLink">← Back to sticker groups</div>
+    </div>
+
+  </div>
+
 </div>
 
 <div class="lightbox" id="lightbox">
@@ -245,7 +298,7 @@ lightbox.addEventListener('click', closeLightbox);
 lightboxClose.addEventListener('click', closeLightbox);
 
 document.addEventListener('click', (e) => {
-  const img = e.target.closest('.gc-image img, .result-card img');
+  const img = e.target.closest('.gc-image img, .result-card img, .stk-thumb img');
   if(img){ openLightbox(img.src, img.alt || ''); }
 });
 
@@ -270,21 +323,23 @@ async function callApi(path, body){
    ============================================================ */
 const tabScan = document.getElementById('tabScan');
 const tabSheet = document.getElementById('tabSheet');
+const tabSticker = document.getElementById('tabSticker');
 const scanMode = document.getElementById('scanMode');
 const sheetMode = document.getElementById('sheetMode');
+const stickerMode = document.getElementById('stickerMode');
 const headerSub = document.getElementById('headerSub');
 
-tabScan.addEventListener('click', () => {
-  tabScan.classList.add('active'); tabSheet.classList.remove('active');
-  scanMode.style.display = 'block'; sheetMode.style.display = 'none';
-  headerSub.textContent = 'LIVE SCAN';
-});
-tabSheet.addEventListener('click', () => {
-  tabSheet.classList.add('active'); tabScan.classList.remove('active');
-  sheetMode.style.display = 'block'; scanMode.style.display = 'none';
-  headerSub.textContent = 'ORDER SHEET';
-  stopScanning();
-});
+function setActiveTab(tab){
+  [tabScan, tabSheet, tabSticker].forEach(t => t.classList.toggle('active', t === tab));
+  scanMode.style.display = tab === tabScan ? 'block' : 'none';
+  sheetMode.style.display = tab === tabSheet ? 'block' : 'none';
+  stickerMode.style.display = tab === tabSticker ? 'block' : 'none';
+  if(tab !== tabScan) stopScanning();
+}
+
+tabScan.addEventListener('click', () => { setActiveTab(tabScan); headerSub.textContent = 'LIVE SCAN'; });
+tabSheet.addEventListener('click', () => { setActiveTab(tabSheet); headerSub.textContent = 'ORDER SHEET'; });
+tabSticker.addEventListener('click', () => { setActiveTab(tabSticker); headerSub.textContent = 'STICKER GROUPS'; });
 
 /* ============================================================
    SCAN MODE (invoice camera scanner)
@@ -759,6 +814,151 @@ tabSheet.addEventListener('click', () => {
     sheetTabInitialized = true;
     showSavedList();
   }
+});
+
+/* ============================================================
+   STICKER GROUPING MODE
+   ============================================================ */
+const stUploadBox = document.getElementById('stUploadBox');
+const stFileInput = document.getElementById('stFileInput');
+const stUploadStatus = document.getElementById('stUploadStatus');
+const stStepUpload = document.getElementById('stStepUpload');
+const stStepGroups = document.getElementById('stStepGroups');
+const stStepDetail = document.getElementById('stStepDetail');
+const stGroupsArea = document.getElementById('stGroupsArea');
+const stSkippedArea = document.getElementById('stSkippedArea');
+const stStatGroups = document.getElementById('stStatGroups');
+const stStatOrders = document.getElementById('stStatOrders');
+const stStatQty = document.getElementById('stStatQty');
+const stBackLink = document.getElementById('stBackLink');
+const stDetailTitle = document.getElementById('stDetailTitle');
+const stDetailArea = document.getElementById('stDetailArea');
+const stDetailBackLink = document.getElementById('stDetailBackLink');
+
+let stLastGroups = [];
+
+function setStUploadStatus(msg, kind){
+  if(!msg){ stUploadStatus.innerHTML = ''; return; }
+  if(kind==='error'){ stUploadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
+  else if(kind==='loading'){ stUploadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
+  else { stUploadStatus.innerHTML = `<div class="status-line" style="color:var(--green)">${msg}</div>`; }
+}
+
+stUploadBox.addEventListener('click', () => stFileInput.click());
+
+stFileInput.addEventListener('change', async () => {
+  const file = stFileInput.files[0];
+  if(!file) return;
+  setStUploadStatus('Reading sheet…', 'loading');
+  try{
+    let workbook;
+    if(/\.csv$/i.test(file.name)){
+      const text = await file.text();
+      workbook = XLSX.read(text, { type: 'string' });
+    } else {
+      const buf = await file.arrayBuffer();
+      workbook = XLSX.read(buf, { type: 'array' });
+    }
+    const parsedOrders = parseWorkbook(workbook);
+    if(parsedOrders.length === 0){
+      setStUploadStatus("Couldn't find any style codes in that file — check it matches the expected format.", 'error');
+      return;
+    }
+    const items = parsedOrders.map(o => ({ styleCode: o.styleCode, age: o.ageDisplay, qty: o.qty }));
+    await runStickerScan(items);
+  } catch(err){
+    setStUploadStatus('Failed: ' + err.message, 'error');
+  } finally {
+    stFileInput.value = '';
+  }
+});
+
+async function runStickerScan(items){
+  let round = 1;
+  let result = null;
+  while(round <= 15){
+    setStUploadStatus(`Scanning images for stickers… (pass ${round}${round>1 ? ', matching remaining style codes':''})`, 'loading');
+    result = await callApi('/api/sticker-scan', { items });
+    if(!result.remainingUnknown || result.remainingUnknown <= 0) break;
+    round++;
+  }
+  setStUploadStatus('', null);
+  stLastGroups = result.groups || [];
+  renderStGroups(result);
+}
+
+function renderStGroups(result){
+  const groups = result.groups || [];
+  const orderCount = groups.reduce((s,g) => s + g.orderCount, 0);
+  const totalQty = groups.reduce((s,g) => s + g.totalQty, 0);
+  stStatGroups.textContent = groups.length;
+  stStatOrders.textContent = orderCount;
+  stStatQty.textContent = totalQty;
+
+  if(groups.length === 0){
+    stGroupsArea.innerHTML = `<div class="status-line">No sticker-based style codes (starting "BLP") found in this sheet.</div>`;
+  } else {
+    stGroupsArea.innerHTML = groups.map((g, i) => `
+      <div class="stk-card" data-index="${i}">
+        <div class="stk-thumb">${g.driveFileId ? `<img src="/api/image?id=${encodeURIComponent(g.driveFileId)}" alt="${g.label}">` : ''}</div>
+        <div class="stk-info">
+          <div class="stk-label">${g.label}</div>
+          <div class="stk-meta"><span><b>${g.orderCount}</b> orders</span><span><b>${g.totalQty}</b> qty</span></div>
+        </div>
+        <div class="stk-arrow">→</div>
+      </div>
+    `).join('');
+    stGroupsArea.querySelectorAll('.stk-card').forEach(el => {
+      el.addEventListener('click', () => openStDetail(Number(el.dataset.index)));
+    });
+  }
+
+  const skippedCount = (result.skipped || []).length;
+  const noImage = result.noImage || [];
+  let note = '';
+  if(skippedCount > 0) note += `<div class="stk-note"><b>${skippedCount}</b> readymade line(s) (style code not starting "BLP") skipped — no sticker needed.</div>`;
+  if(noImage.length > 0) note += `<div class="stk-note"><b>${noImage.length}</b> style code(s) had no matching image in Drive, so couldn't be grouped: ${noImage.slice(0,12).join(', ')}${noImage.length>12 ? '…' : ''}</div>`;
+  stSkippedArea.innerHTML = note;
+
+  stStepUpload.style.display = 'none';
+  stStepGroups.style.display = 'block';
+  stStepDetail.style.display = 'none';
+}
+
+function openStDetail(index){
+  const g = stLastGroups[index];
+  if(!g) return;
+  stDetailTitle.textContent = g.label;
+  stDetailArea.innerHTML = `
+    <div class="stk-card" style="cursor:default;margin-bottom:14px;">
+      <div class="stk-thumb" style="width:56px;height:56px;">${g.driveFileId ? `<img src="/api/image?id=${encodeURIComponent(g.driveFileId)}" alt="${g.label}">` : ''}</div>
+      <div class="stk-info">
+        <div class="stk-label">${g.orderCount} orders • ${g.totalQty} total qty</div>
+      </div>
+    </div>
+  ` + g.orders.map(o => `
+    <div class="stk-row">
+      <div>
+        <div class="code">${o.styleCode}</div>
+        <div class="sub">Age ${o.age || '—'}</div>
+      </div>
+      <div style="margin-left:auto;font-family:var(--mono);font-size:14px;color:var(--amber);font-weight:700;">Qty ${o.qty}</div>
+    </div>
+  `).join('');
+  stStepGroups.style.display = 'none';
+  stStepDetail.style.display = 'block';
+}
+
+stDetailBackLink.addEventListener('click', () => {
+  stStepDetail.style.display = 'none';
+  stStepGroups.style.display = 'block';
+});
+
+stBackLink.addEventListener('click', () => {
+  stStepGroups.style.display = 'none';
+  stStepDetail.style.display = 'none';
+  stStepUpload.style.display = 'block';
+  setStUploadStatus('', null);
 });
 </script>
 </body>
