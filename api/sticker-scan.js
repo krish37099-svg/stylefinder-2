@@ -1,8 +1,8 @@
 import { google } from 'googleapis';
 import { kv } from '@vercel/kv';
 
-const MAX_UNKNOWN_PER_CALL = 16;   // cap images sent to Gemini in one request
-const MAX_EXISTING_GROUPS_SHOWN = 20; // cap existing sticker groups shown for comparison
+const MAX_UNKNOWN_PER_CALL = 24; // how many not-yet-seen style codes to process in one request
+const CONCURRENCY = 5;           // parallel Gemini calls at a time
 
 function escapeQuery(s) {
   return s.replace(/'/g, "\\'");
@@ -42,64 +42,89 @@ async function fetchImageBase64(drive, fileId) {
   return Buffer.from(result.data).toString('base64');
 }
 
-function slugify(label) {
-  return (label || 'sticker').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 40) || 'sticker';
-}
-
 // Only style codes starting "BLP" use a pasted sticker. Plain "BL..." (no P) are readymade prints — no sticker to scan.
 function needsStickerScan(styleCode) {
   return /^BLP/i.test((styleCode || '').trim());
 }
 
+function normalizeKey(s) {
+  return (s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Small edit-distance check so trivial OCR wobble between separate scans (an extra space, a
+// dropped punctuation mark) doesn't fragment what is really the same printed sticker text.
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = new Array(n + 1);
+  let curr = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
+function findCloseCanonKey(key, canonKeys) {
+  if (!key) return null;
+  if (canonKeys.includes(key)) return key;
+  const threshold = key.length <= 6 ? 1 : Math.max(2, Math.round(key.length * 0.12));
+  let best = null, bestDist = Infinity;
+  for (const ck of canonKeys) {
+    if (Math.abs(ck.length - key.length) > threshold) continue;
+    const d = levenshtein(key, ck);
+    if (d <= threshold && d < bestDist) { best = ck; bestDist = d; }
+  }
+  return best;
+}
+
 async function clearStickerCache() {
   try {
     const keys = await kv.keys('stickermap:*');
-    if (keys.length > 0) {
-      for (let i = 0; i < keys.length; i += 200) {
-        await Promise.all(keys.slice(i, i + 200).map(k => kv.del(k)));
-      }
+    for (let i = 0; i < keys.length; i += 200) {
+      await Promise.all(keys.slice(i, i + 200).map(k => kv.del(k)));
     }
   } catch (e) { /* best effort */ }
-  await kv.set('stickers:index', []);
+  await kv.set('stickers:catalog', {});
 }
 
-const GROUPING_SCHEMA = {
+const EXTRACT_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    matchedToExisting: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          groupIndex: { type: 'INTEGER' },
-          styleCodes: { type: 'ARRAY', items: { type: 'STRING' } }
-        },
-        required: ['groupIndex', 'styleCodes']
-      }
-    },
-    newGroups: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          label: { type: 'STRING' },
-          styleCodes: { type: 'ARRAY', items: { type: 'STRING' } }
-        },
-        required: ['label', 'styleCodes']
-      }
-    }
+    stickerText: { type: 'STRING' },
+    stickerMotif: { type: 'STRING' },
+    hasSticker: { type: 'BOOLEAN' }
   },
-  required: ['matchedToExisting', 'newGroups']
+  required: ['stickerText', 'stickerMotif', 'hasSticker']
 };
 
-async function callGeminiGrouping(parts) {
+async function extractSticker(base64, mimeType) {
   const apiKey = process.env.GEMINI_API_KEY;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
   const body = {
-    contents: [{ parts }],
+    contents: [{
+      parts: [
+        {
+          text:
+`This is a product photo of a kids' garment with a printed/pasted graphic "sticker" on it. Look ONLY at the printed design — completely ignore the garment's fabric color, garment type, background, and any "100% cotton" logo badge.
+
+- "stickerText": transcribe any text that is part of the printed design, EXACTLY as printed, including any spelling mistakes, letter-for-letter (e.g. if it says "Independencee" with a double e, write it that way). Empty string if the design has no text.
+- "stickerMotif": if there is a graphic/illustration element (a character, animal, icon), describe it in 3-6 words (e.g. "penguin holding red scarf"). Empty string if the design is text-only with no illustration.
+- "hasSticker": true if there is any printed design at all on the garment.`
+        },
+        { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64 } }
+      ]
+    }],
     generationConfig: {
       responseMimeType: 'application/json',
-      responseSchema: GROUPING_SCHEMA
+      responseSchema: EXTRACT_SCHEMA
     }
   };
 
@@ -114,13 +139,26 @@ async function callGeminiGrouping(parts) {
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (text) {
         const parsed = JSON.parse(text);
-        if (Array.isArray(parsed.matchedToExisting) || Array.isArray(parsed.newGroups)) return parsed;
+        if (typeof parsed.stickerText === 'string' || typeof parsed.stickerMotif === 'string') return parsed;
       }
     } catch (e) {
       // retry once
     }
   }
-  return null; // caller handles the fallback
+  return null;
+}
+
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let i = 0;
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  }
+  await Promise.all(new Array(Math.min(limit, items.length)).fill(0).map(worker));
+  return results;
 }
 
 export default async function handler(req, res) {
@@ -149,8 +187,10 @@ export default async function handler(req, res) {
 
     const uniqueCodes = [...new Set(scanItems.map(o => (o.styleCode || '').trim()).filter(Boolean))];
 
-    // 1. Check which style codes already have a known sticker mapping (built up over past scans)
-    const knownMap = {};
+    // catalog: { canonKey: { label, driveFileId, mimeType } }
+    let catalog = (await kv.get('stickers:catalog')) || {};
+
+    const knownMap = {}; // styleCode -> canonKey
     const kvLookups = await Promise.all(uniqueCodes.map(code => kv.get(`stickermap:${code}`)));
     const unknownCodes = [];
     uniqueCodes.forEach((code, i) => {
@@ -159,7 +199,6 @@ export default async function handler(req, res) {
     });
 
     const noImage = [];
-    let stickerIndex = (await kv.get('stickers:index')) || [];
     let remainingUnknown = 0;
     let scanWarning = null;
 
@@ -167,121 +206,66 @@ export default async function handler(req, res) {
       const drive = await driveClient();
       const toProcess = unknownCodes.slice(0, MAX_UNKNOWN_PER_CALL);
       const overflow = unknownCodes.slice(MAX_UNKNOWN_PER_CALL);
-
-      // 2. Fetch drive images for the unknown style codes
-      const unknownImages = [];
-      for (const code of toProcess) {
-        const file = await findDriveImage(drive, code);
-        if (!file) { noImage.push(code); continue; }
-        try {
-          const base64 = await fetchImageBase64(drive, file.id);
-          unknownImages.push({ styleCode: code, fileId: file.id, mimeType: file.mimeType || 'image/jpeg', base64 });
-        } catch (e) {
-          noImage.push(code);
-        }
-      }
-
-      if (unknownImages.length > 0) {
-        // 3. Pull representative images for existing sticker groups, so the model can match against them
-        const existingGroups = stickerIndex.slice(0, MAX_EXISTING_GROUPS_SHOWN);
-        const groupRefImages = [];
-        for (const g of existingGroups) {
-          if (!g.driveFileId) continue;
-          try {
-            const base64 = await fetchImageBase64(drive, g.driveFileId);
-            groupRefImages.push({ key: g.key, base64, mimeType: g.mimeType || 'image/jpeg' });
-          } catch (e) {
-            // stale/broken reference — skip, model just won't have an image for that group
-          }
-        }
-
-        const parts = [];
-        parts.push({
-          text:
-`You are comparing product photos of kids' clothing. Each garment has a printed/pasted graphic "sticker" — a character illustration, motif, or text design — applied to it. The exact same sticker artwork is reused across many different style codes and garment colors/types (t-shirt, onesie, romper, all colors) — garment color and garment type are NEVER relevant, ignore them completely.
-
-Group items together ONLY if the sticker artwork itself is identical or a straightforward palette recolor of the same artwork: same wording (character-for-character, including any typos), same illustration, same layout/composition. Two designs that are merely similar in theme (e.g. both "Independence Day" themed, both featuring an elephant, both a birthday design) but have DIFFERENT wording or a different illustration are DIFFERENT stickers and must NOT be grouped — e.g. a print reading "My First Independence Day" is a different sticker from one reading "Happy Independence Day", even though both are patriotic prints.
-
-You are given:
-- EXISTING_GROUP entries: stickers already catalogued, each with an index number, a label, and (usually) a reference photo.
-- NEW_ITEM entries: newly scanned style codes that need to be placed into a sticker group.
-
-For every NEW_ITEM style code, decide exactly one of:
-(a) it matches an EXISTING_GROUP's artwork — list its styleCode under that group's index in "matchedToExisting"
-(b) it matches one or more OTHER NEW_ITEMs' artwork but no existing group — list all of those styleCodes together under one entry in "newGroups" with a short descriptive label (3-6 words, describe the actual wording/illustration so it's recognizable, e.g. "Happy Independence Day script tee" or "My First Independence Day tricolor brush")
-(c) it matches nothing else — it still goes in "newGroups" as its own single-styleCode entry with a label
-
-Every NEW_ITEM styleCode must appear exactly once, in either matchedToExisting or newGroups.`
-        });
-
-        existingGroups.forEach((g, i) => {
-          const ref = groupRefImages.find(r => r.key === g.key);
-          parts.push({ text: `EXISTING_GROUP index=${i} label="${g.label}"` });
-          if (ref) parts.push({ inline_data: { mime_type: ref.mimeType, data: ref.base64 } });
-        });
-
-        unknownImages.forEach(item => {
-          parts.push({ text: `NEW_ITEM styleCode="${item.styleCode}"` });
-          parts.push({ inline_data: { mime_type: item.mimeType, data: item.base64 } });
-        });
-
-        const parsed = await callGeminiGrouping(parts);
-
-        if (!parsed) {
-          scanWarning = 'The sticker-matching AI call failed — new style codes were each filed as their own separate group this round. Try scanning again.';
-        }
-
-        const seenThisBatch = new Set();
-
-        for (const m of (parsed?.matchedToExisting || [])) {
-          const group = existingGroups[m.groupIndex];
-          if (!group) continue;
-          for (const code of (m.styleCodes || [])) {
-            const item = unknownImages.find(u => u.styleCode === code);
-            if (!item || seenThisBatch.has(code)) continue;
-            knownMap[code] = group.key;
-            seenThisBatch.add(code);
-          }
-        }
-
-        for (const ng of (parsed?.newGroups || [])) {
-          const codesInGroup = (ng.styleCodes || []).filter(code =>
-            unknownImages.some(u => u.styleCode === code) && !seenThisBatch.has(code)
-          );
-          if (codesInGroup.length === 0) continue;
-          const repItem = unknownImages.find(u => u.styleCode === codesInGroup[0]);
-          const key = `${slugify(ng.label)}-${Date.now().toString(36).slice(-4)}-${Math.random().toString(36).slice(2, 5)}`;
-          stickerIndex.unshift({ key, label: ng.label || repItem.styleCode, driveFileId: repItem.fileId, mimeType: repItem.mimeType });
-          for (const code of codesInGroup) {
-            knownMap[code] = key;
-            seenThisBatch.add(code);
-          }
-        }
-
-        // Anything the model didn't place anywhere (including total call failure) becomes its own solo group
-        for (const item of unknownImages) {
-          if (!knownMap[item.styleCode]) {
-            const key = `unmatched-${item.styleCode.toLowerCase()}`;
-            stickerIndex.unshift({ key, label: item.styleCode, driveFileId: item.fileId, mimeType: item.mimeType });
-            knownMap[item.styleCode] = key;
-          }
-        }
-
-        // Persist the sticker directory + per-style-code mapping so future scans are instant
-        stickerIndex = stickerIndex.slice(0, 300);
-        await kv.set('stickers:index', stickerIndex);
-        await Promise.all(
-          toProcess
-            .filter(code => knownMap[code])
-            .map(code => kv.set(`stickermap:${code}`, knownMap[code]))
-        );
-      }
-
-      // Codes not attempted this round (beyond the per-call cap) — client will call again
       remainingUnknown = overflow.length;
+
+      let extractionFailures = 0;
+
+      // Process each unknown style code independently — fetch its image, then extract its sticker.
+      const perCodeResults = await mapWithConcurrency(toProcess, CONCURRENCY, async (code) => {
+        const file = await findDriveImage(drive, code);
+        if (!file) return { code, noImage: true };
+        let base64;
+        try {
+          base64 = await fetchImageBase64(drive, file.id);
+        } catch (e) {
+          return { code, noImage: true };
+        }
+        const extracted = await extractSticker(base64, file.mimeType);
+        if (!extracted) {
+          extractionFailures++;
+          return { code, fileId: file.id, mimeType: file.mimeType, extracted: null };
+        }
+        return { code, fileId: file.id, mimeType: file.mimeType, extracted };
+      });
+
+      // Assign each to a canon sticker key, in a fixed order so matches within this same
+      // batch are resolved deterministically (first occurrence defines the label).
+      const canonKeys = Object.keys(catalog);
+      for (const r of perCodeResults) {
+        if (r.noImage) { noImage.push(r.code); continue; }
+        if (!r.extracted) {
+          // extraction failed twice — fall back to a solo group keyed on the style code itself
+          const key = `code:${r.code.toLowerCase()}`;
+          catalog[key] = catalog[key] || { label: r.code, driveFileId: r.fileId, mimeType: r.mimeType };
+          knownMap[r.code] = key;
+          continue;
+        }
+        const rawLabel = (r.extracted.stickerText || '').trim() || (r.extracted.stickerMotif || '').trim();
+        const normKey = normalizeKey(rawLabel) || `code ${r.code.toLowerCase()}`;
+        let key = findCloseCanonKey(normKey, canonKeys);
+        if (!key) {
+          key = normKey;
+          catalog[key] = { label: rawLabel || r.code, driveFileId: r.fileId, mimeType: r.mimeType };
+          canonKeys.push(key);
+        } else if (!catalog[key]) {
+          catalog[key] = { label: rawLabel || r.code, driveFileId: r.fileId, mimeType: r.mimeType };
+        }
+        knownMap[r.code] = key;
+      }
+
+      if (extractionFailures > 0) {
+        scanWarning = `${extractionFailures} style code(s) couldn't be read by the sticker-recognition AI and were filed under their own style code — try scanning again.`;
+      }
+
+      await kv.set('stickers:catalog', catalog);
+      await Promise.all(
+        toProcess
+          .filter(code => knownMap[code])
+          .map(code => kv.set(`stickermap:${code}`, knownMap[code]))
+      );
     }
 
-    // 4. Build the response groups from the full order list using whatever mappings we now have
+    // Build the response groups from the full order list using whatever mappings we now have
     const groupsByKey = {};
     const stillNoImage = [];
     for (const o of scanItems) {
@@ -292,7 +276,7 @@ Every NEW_ITEM styleCode must appear exactly once, in either matchedToExisting o
         continue;
       }
       if (!groupsByKey[key]) {
-        const meta = stickerIndex.find(g => g.key === key) || { key, label: code, driveFileId: null };
+        const meta = catalog[key] || { label: code, driveFileId: null };
         groupsByKey[key] = { key, label: meta.label, driveFileId: meta.driveFileId, orderCount: 0, totalQty: 0, orders: [] };
       }
       groupsByKey[key].orderCount += 1;
