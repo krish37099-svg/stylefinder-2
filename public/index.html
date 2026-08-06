@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Style Finder</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#15171a;
+    --panel:#1e2126;
+    --panel-2:#262a31;
+    --line:#33373f;
+    --amber:#ff9d2f;
+    --amber-dim:#7a5324;
+    --green:#3ecf8e;
+    --red:#ff5c5c;
+    --text:#eef0f2;
+    --text-dim:#9aa1ab;
+    --mono: 'SF Mono','Roboto Mono',Consolas,monospace;
+    --sans: -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);}
+  body{min-height:100vh;display:flex;justify-content:center;padding:0 0 60px;}
+  .app{width:100%;max-width:520px;padding:20px 16px 0;}
+  .header{display:flex;align-items:center;gap:10px;padding:6px 2px 18px;border-bottom:1px solid var(--line);margin-bottom:16px;}
+  .header .tick{width:10px;height:10px;background:var(--amber);box-shadow:0 0 0 3px var(--amber-dim);}
+  .header h1{font-size:15px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;margin:0;color:var(--text);}
+  .header .sub{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text-dim);}
+
+  .mode-tabs{display:flex;gap:8px;margin-bottom:16px;}
+  .mode-tab{
+    flex:1;padding:10px;border:1px solid var(--line);background:var(--panel);color:var(--text-dim);
+    font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    border-radius:2px;cursor:pointer;font-weight:700;
+  }
+  .mode-tab.active{border-color:var(--amber);color:var(--amber);background:var(--panel-2);}
+
+  .step{background:var(--panel);border:1px solid var(--line);border-radius:2px;padding:16px;margin-bottom:14px;}
+  .step-label{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--text-dim);text-transform:uppercase;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+  .step-label .num{width:18px;height:18px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text-dim);}
+
+  .scan-box{border:1px dashed var(--line);border-radius:2px;aspect-ratio:4/3;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;cursor:pointer;background:repeating-linear-gradient(45deg,#1a1c20,#1a1c20 10px,#191b1f 10px,#191b1f 20px);color:var(--text-dim);overflow:hidden;position:relative;}
+  .scan-box video, .scan-box img{width:100%;height:100%;object-fit:cover;background:#000;display:block;}
+  .scan-box .cta{font-size:13px;font-weight:600;}
+  .scan-box svg{width:34px;height:34px;stroke:var(--text-dim);}
+
+  .scan-overlay{position:absolute;inset:0;pointer-events:none;display:flex;align-items:flex-end;justify-content:center;padding-bottom:14px;}
+  .scan-pill{background:rgba(15,16,18,.85);border:1px solid var(--amber-dim);color:var(--amber);font-family:var(--mono);font-size:12px;padding:7px 14px;border-radius:20px;display:flex;align-items:center;gap:8px;}
+  .scan-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--amber);animation:pulse 1s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.25;}}
+  .scan-frame{position:absolute; inset:14%;border:1.5px solid rgba(255,157,47,.55);border-radius:6px;pointer-events:none;}
+
+  .link-btn{display:block;text-align:center;font-family:var(--mono);font-size:11px;color:var(--text-dim);text-decoration:underline;cursor:pointer;margin-top:12px;}
+
+  .code-row{display:flex;gap:8px;margin-top:4px;}
+  .code-row input{flex:1;background:var(--panel-2);border:1px solid var(--line);color:var(--amber);font-family:var(--mono);font-size:15px;letter-spacing:.03em;padding:11px 12px;border-radius:2px;}
+  .code-row input:focus{outline:none;border-color:var(--amber);}
+
+  .btn{width:100%;padding:13px 16px;border:none;border-radius:2px;font-family:var(--sans);font-weight:700;font-size:14px;letter-spacing:.02em;cursor:pointer;margin-top:12px;transition:opacity .15s;}
+  .btn:disabled{opacity:.35;cursor:not-allowed;}
+  .btn-primary{background:var(--amber);color:#1a1400;}
+  .btn-primary:active:not(:disabled){opacity:.8;}
+  .btn-row{display:flex;gap:8px;}
+  .btn-row .btn{margin-top:0;}
+  .btn-ghost{background:transparent;border:1px solid var(--line);color:var(--text);}
+
+  .status-line{font-family:var(--mono);font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:8px;margin-top:10px;}
+  .status-line .spin{width:11px;height:11px;border:2px solid var(--line);border-top-color:var(--amber);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .error-box{border:1px solid var(--red);background:rgba(255,92,92,.08);color:#ffb3b3;font-size:12.5px;padding:10px 12px;border-radius:2px;margin-top:10px;font-family:var(--mono);line-height:1.5;}
+
+  .result-card{border:1px solid var(--line);border-radius:2px;overflow:hidden;margin-top:12px;background:var(--panel-2);}
+  .result-card .frame-wrap{aspect-ratio:1/1;background:#000;display:flex;align-items:center;justify-content:center;}
+  .result-card img{max-width:100%;max-height:100%;object-fit:contain;}
+  .result-card .meta{padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--line);}
+  .result-card .fname{font-family:var(--mono);font-size:12px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .result-card a{font-size:11px;color:var(--amber);text-decoration:none;font-weight:700;letter-spacing:.03em;white-space:nowrap;}
+
+  .reset-link{display:block;text-align:center;margin-top:22px;font-family:var(--mono);font-size:11px;color:var(--text-dim);text-decoration:underline;cursor:pointer;}
+
+  /* Order sheet mode */
+  .upload-box{border:1px dashed var(--line);border-radius:2px;padding:34px 16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;cursor:pointer;color:var(--text-dim);text-align:center;}
+  .upload-box svg{width:30px;height:30px;stroke:var(--text-dim);}
+  .upload-box .cta{font-size:13px;font-weight:600;color:var(--text);}
+  .upload-box .hint{font-size:11px;font-family:var(--mono);}
+
+  .stats-row{display:flex;gap:10px;margin-top:14px;}
+  .stat-box{flex:1;background:var(--panel-2);border:1px solid var(--line);border-radius:2px;padding:12px;text-align:center;}
+  .stat-box .n{font-family:var(--mono);font-size:22px;color:var(--amber);font-weight:700;}
+  .stat-box .l{font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:.06em;text-transform:uppercase;margin-top:4px;}
+
+  .progress-bar-track{height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden;margin-top:14px;}
+  .progress-bar-fill{height:100%;background:var(--green);width:0%;transition:width .25s;}
+  .progress-text{font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:6px;text-align:center;}
+
+  .order-card{margin-top:14px;}
+  .order-image{aspect-ratio:1/1;background:#000;border:1px solid var(--line);border-radius:2px;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  .order-image img{max-width:100%;max-height:100%;object-fit:contain;}
+  .order-fields{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .order-field{background:var(--panel-2);border:1px solid var(--line);border-radius:2px;padding:10px 12px;}
+  .order-field.full{grid-column:1/-1;}
+  .order-field .l{font-family:var(--mono);font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;}
+  .order-field .v{font-family:var(--mono);font-size:16px;color:var(--text);margin-top:3px;font-weight:700;}
+  .order-field .v.amber{color:var(--amber);}
+
+  .drive-link{display:block;text-align:right;margin-top:6px;font-size:11px;color:var(--amber);text-decoration:none;font-weight:700;}
+
+  .saved-item{background:var(--panel-2);border:1px solid var(--line);border-radius:2px;padding:12px;margin-bottom:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;}
+  .saved-item:active{opacity:.8;}
+  .saved-item .si-name{font-size:13px;font-weight:600;word-break:break-all;}
+  .saved-item .si-meta{font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:3px;}
+  .saved-item .si-arrow{color:var(--amber);font-family:var(--mono);flex-shrink:0;}
+
+  .order-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;}
+  .grid-card{background:var(--panel-2);border:1px solid var(--line);border-radius:2px;overflow:hidden;transition:opacity .2s;}
+  .grid-card.fulfilled{opacity:.45;}
+  .grid-card .gc-image{aspect-ratio:1/1;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  .grid-card .gc-image img{max-width:100%;max-height:100%;object-fit:contain;}
+  .grid-card .gc-tags{padding:8px;}
+  .grid-card .gc-code{font-family:var(--mono);font-size:11px;color:var(--amber);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .grid-card .gc-meta{font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:2px;display:flex;justify-content:space-between;}
+  .grid-card .gc-fulfill-btn{width:100%;border:none;border-top:1px solid var(--line);background:var(--panel);color:var(--text-dim);font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:8px;cursor:pointer;font-weight:700;}
+  .grid-card.fulfilled .gc-fulfill-btn{background:var(--green);color:#08281c;border-top-color:var(--green);}
+
+  .gc-image img, .result-card img{cursor:zoom-in;}
+
+  .lightbox{position:fixed;inset:0;background:rgba(10,11,13,.94);z-index:1000;display:none;align-items:center;justify-content:center;padding:24px;cursor:zoom-out;}
+  .lightbox-inner{max-width:100%;max-height:100%;text-align:center;}
+  .lightbox-inner img{max-width:100%;max-height:78vh;object-fit:contain;border-radius:4px;}
+  .lightbox-caption{margin-top:14px;font-family:var(--mono);color:var(--amber);font-size:13px;letter-spacing:.02em;}
+  .lightbox-close{position:absolute;top:18px;right:18px;width:34px;height:34px;border-radius:50%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);font-size:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="header">
+    <div class="tick"></div>
+    <h1>Style Finder</h1>
+    <div class="sub" id="headerSub">LIVE SCAN</div>
+  </div>
+
+  <div class="mode-tabs">
+    <button class="mode-tab active" id="tabScan">Scan Invoice</button>
+    <button class="mode-tab" id="tabSheet">Order Sheet</button>
+  </div>
+
+  <!-- =============== SCAN MODE =============== -->
+  <div id="scanMode">
+    <div class="step" id="stepScan">
+      <div class="step-label"><span class="num">1</span> Point camera at invoice</div>
+      <div class="scan-box" id="scanBox">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M3 7h3l1.5-2h9L18 7h3v13H3V7z"/><circle cx="12" cy="14" r="3.5"/></svg>
+        <div class="cta">Tap to start scanning</div>
+      </div>
+      <div id="scanStatus"></div>
+      <div class="link-btn" id="manualLink">Or type the style code manually</div>
+    </div>
+
+    <div class="step" id="stepCode" style="display:none;">
+      <div class="step-label"><span class="num">2</span> Style code <span id="codeSourceTag" style="text-transform:none;letter-spacing:0;"></span></div>
+      <div class="code-row">
+        <input type="text" id="codeInput" placeholder="e.g. BLPTSW443" autocapitalize="characters">
+      </div>
+      <button class="btn btn-primary" id="findBtn">Search Drive</button>
+      <div id="findStatus"></div>
+    </div>
+
+    <div class="step" id="stepResults" style="display:none;">
+      <div class="step-label"><span class="num">3</span> Match found</div>
+      <div id="resultsArea"></div>
+    </div>
+
+    <div class="reset-link" id="resetLink" style="display:none;">Start over — scan another invoice</div>
+  </div>
+
+  <!-- =============== ORDER SHEET MODE =============== -->
+  <div id="sheetMode" style="display:none;">
+
+    <div class="step" id="stepSavedList">
+      <div class="step-label"><span class="num">•</span> Saved sheets — shared with everyone</div>
+      <div id="savedListArea"><div class="status-line"><span class="spin"></span>Loading saved sheets…</div></div>
+      <button class="btn btn-ghost" id="showUploadBtn" style="margin-top:14px;">+ Upload a new sheet</button>
+    </div>
+
+    <div class="step" id="stepUpload" style="display:none;">
+      <div class="step-label"><span class="num">↑</span> Upload order sheet</div>
+      <label class="upload-box" id="uploadBox" for="sheetFileInput">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M12 3v12m0-12l-4 4m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+        <div class="cta">Tap to upload .xlsx or .csv</div>
+        <div class="hint">Reads every style code, wherever it sits in the sheet — saved for everyone once uploaded</div>
+      </label>
+      <input type="file" id="sheetFileInput" accept=".xlsx,.xls,.csv" style="display:none;">
+      <div id="uploadStatus"></div>
+      <div class="link-btn" id="backToListLink">← Back to saved sheets</div>
+    </div>
+
+    <div class="step" id="stepGrid" style="display:none;">
+      <div class="step-label"><span class="num">▦</span> <span id="gridTitle">Orders</span></div>
+      <div class="stats-row">
+        <div class="stat-box"><div class="n" id="statOrders">0</div><div class="l">Orders</div></div>
+        <div class="stat-box"><div class="n" id="statQty">0</div><div class="l">Total Qty</div></div>
+        <div class="stat-box"><div class="n" id="statTicked">0</div><div class="l">Fulfilled</div></div>
+      </div>
+      <div class="progress-bar-track"><div class="progress-bar-fill" id="reviewProgressFill"></div></div>
+      <div id="gridArea" class="order-grid"></div>
+      <div class="link-btn" id="refreshGridLink">↻ Refresh from server</div>
+      <div class="link-btn" id="backToListLink2">← Back to saved sheets</div>
+    </div>
+
+  </div>
+
+</div>
+
+<div class="lightbox" id="lightbox">
+  <div class="lightbox-close" id="lightboxClose">✕</div>
+  <div class="lightbox-inner">
+    <img id="lightboxImg" src="" alt="">
+    <div class="lightbox-caption" id="lightboxCaption"></div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   LIGHTBOX — tap any product image to view it bigger
+   ============================================================ */
+const lightbox = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightboxImg');
+const lightboxCaption = document.getElementById('lightboxCaption');
+const lightboxClose = document.getElementById('lightboxClose');
+
+function openLightbox(src, caption){
+  lightboxImg.src = src;
+  lightboxCaption.textContent = caption || '';
+  lightbox.style.display = 'flex';
+}
+function closeLightbox(){
+  lightbox.style.display = 'none';
+  lightboxImg.src = '';
+}
+lightbox.addEventListener('click', closeLightbox);
+lightboxClose.addEventListener('click', closeLightbox);
+
+document.addEventListener('click', (e) => {
+  const img = e.target.closest('.gc-image img, .result-card img');
+  if(img){ openLightbox(img.src, img.alt || ''); }
+});
+
+/* ============================================================
+   SHARED HELPERS
+   ============================================================ */
+async function callApi(path, body){
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok){
+    throw new Error((data && data.error && (data.error.message || JSON.stringify(data.error))) || `Request failed (${res.status})`);
+  }
+  return data;
+}
+
+/* ============================================================
+   MODE SWITCHING
+   ============================================================ */
+const tabScan = document.getElementById('tabScan');
+const tabSheet = document.getElementById('tabSheet');
+const scanMode = document.getElementById('scanMode');
+const sheetMode = document.getElementById('sheetMode');
+const headerSub = document.getElementById('headerSub');
+
+tabScan.addEventListener('click', () => {
+  tabScan.classList.add('active'); tabSheet.classList.remove('active');
+  scanMode.style.display = 'block'; sheetMode.style.display = 'none';
+  headerSub.textContent = 'LIVE SCAN';
+});
+tabSheet.addEventListener('click', () => {
+  tabSheet.classList.add('active'); tabScan.classList.remove('active');
+  sheetMode.style.display = 'block'; scanMode.style.display = 'none';
+  headerSub.textContent = 'ORDER SHEET';
+  stopScanning();
+});
+
+/* ============================================================
+   SCAN MODE (invoice camera scanner)
+   ============================================================ */
+const scanBox = document.getElementById('scanBox');
+const scanStatus = document.getElementById('scanStatus');
+const manualLink = document.getElementById('manualLink');
+const stepCode = document.getElementById('stepCode');
+const codeInput = document.getElementById('codeInput');
+const codeSourceTag = document.getElementById('codeSourceTag');
+const findBtn = document.getElementById('findBtn');
+const findStatus = document.getElementById('findStatus');
+const stepResults = document.getElementById('stepResults');
+const resultsArea = document.getElementById('resultsArea');
+const resetLink = document.getElementById('resetLink');
+
+let videoEl = null;
+let mediaStream = null;
+let scanTimer = null;
+let ocrWorker = null;
+let busy = false;
+let scanning = false;
+
+function setStatus(el, msg, kind){
+  if(!msg){ el.innerHTML=''; return; }
+  if(kind==='error'){ el.innerHTML = `<div class="error-box">${msg}</div>`; }
+  else if(kind==='loading'){ el.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
+  else { el.innerHTML = `<div class="status-line" style="color:var(--green)">${msg}</div>`; }
+}
+
+function findStyleCode(text){
+  const idx = text.search(/style\s*code/i);
+  const searchText = idx === -1 ? text : text.slice(idx, idx + 80);
+  const hyphenMatch = searchText.match(/([A-Za-z0-9]{4,})\s*[\-–]\s*([A-Za-z0-9]{1,6})/);
+  if(hyphenMatch) return hyphenMatch[1];
+  const tokens = searchText.match(/[A-Za-z0-9]{5,}/g) || [];
+  const candidate = tokens.find(t => /\d/.test(t) && !/^style$/i.test(t) && !/^code$/i.test(t));
+  if(candidate) return candidate;
+  return '';
+}
+
+async function getWorker(){
+  if(!ocrWorker){ ocrWorker = await Tesseract.createWorker('eng'); }
+  return ocrWorker;
+}
+
+function captureFrame(video, maxDim, quality){
+  const canvas = document.createElement('canvas');
+  let w = video.videoWidth, h = video.videoHeight;
+  if(w > maxDim || h > maxDim){
+    const scale = maxDim / Math.max(w, h);
+    w = Math.round(w * scale); h = Math.round(h * scale);
+  }
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+async function startScanning(){
+  scanBox.innerHTML = '';
+  setStatus(scanStatus, 'Requesting camera access…', 'loading');
+  try{
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } }, audio: false
+    });
+  } catch(err){
+    setStatus(scanStatus, "Couldn't access the camera: " + err.message + ' — try manual entry below.', 'error');
+    scanBox.innerHTML = `<div class="cta">Tap to try again</div>`;
+    return;
+  }
+
+  videoEl = document.createElement('video');
+  videoEl.setAttribute('autoplay', ''); videoEl.setAttribute('playsinline', ''); videoEl.muted = true;
+  videoEl.srcObject = mediaStream;
+
+  scanBox.innerHTML = '';
+  scanBox.appendChild(videoEl);
+  const frameDiv = document.createElement('div'); frameDiv.className = 'scan-frame'; scanBox.appendChild(frameDiv);
+  const overlay = document.createElement('div'); overlay.className = 'scan-overlay';
+  overlay.innerHTML = `<div class="scan-pill"><span class="dot"></span>Scanning for style code…</div>`;
+  scanBox.appendChild(overlay);
+
+  await new Promise((resolve) => { videoEl.onloadedmetadata = resolve; });
+  setStatus(scanStatus, '', null);
+
+  scanning = true;
+  await getWorker();
+  scanTimer = setInterval(scanTick, 1400);
+}
+
+async function scanTick(){
+  if(!scanning || busy || !videoEl) return;
+  busy = true;
+  try{
+    const frameDataUrl = captureFrame(videoEl, 900, 0.72);
+    const worker = await getWorker();
+    const { data } = await worker.recognize(frameDataUrl);
+    const code = findStyleCode(data.text || '');
+    if(code){
+      const freezeFrame = captureFrame(videoEl, 1200, 0.85);
+      stopScanning();
+      onCodeDetected(code, freezeFrame, 'auto');
+    }
+  } catch(e){ /* ignore a single failed frame */ }
+  finally { busy = false; }
+}
+
+function stopScanning(){
+  scanning = false;
+  if(scanTimer){ clearInterval(scanTimer); scanTimer = null; }
+  if(mediaStream){ mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+}
+
+function onCodeDetected(code, freezeFrameDataUrl, source){
+  scanBox.innerHTML = `<img src="${freezeFrameDataUrl}" alt="captured invoice">`;
+  setStatus(scanStatus, 'Style code detected.', 'ok');
+  codeSourceTag.textContent = source === 'auto' ? '(auto-detected — check it)' : '(manual)';
+  codeInput.value = code;
+  stepCode.style.display = 'block';
+  resetLink.style.display = 'block';
+  stepCode.scrollIntoView({behavior:'smooth', block:'nearest'});
+  if(source === 'auto'){ performSearch(code); }
+}
+
+scanBox.addEventListener('click', () => { if(!scanning && !mediaStream){ startScanning(); } });
+
+manualLink.addEventListener('click', () => {
+  stopScanning();
+  setStatus(scanStatus, '', null);
+  scanBox.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M3 7h3l1.5-2h9L18 7h3v13H3V7z"/><circle cx="12" cy="14" r="3.5"/></svg><div class="cta">Tap to start scanning</div>`;
+  codeSourceTag.textContent = '(manual)';
+  codeInput.value = '';
+  stepCode.style.display = 'block';
+  resetLink.style.display = 'block';
+  codeInput.focus();
+});
+
+async function performSearch(code){
+  findBtn.disabled = true;
+  setStatus(findStatus, 'Searching Google Drive…', 'loading');
+  stepResults.style.display = 'none';
+  resultsArea.innerHTML = '';
+  try{
+    const data = await callApi('/api/find-image', { styleCode: code });
+    if(!data.matches || data.matches.length === 0){
+      setStatus(findStatus, data.note || 'No matching image found in Drive.', 'error');
+      return;
+    }
+    setStatus(findStatus, `Found ${data.matches.length} match${data.matches.length>1?'es':''}.` + (data.note ? ' ' + data.note : ''), 'ok');
+    resultsArea.innerHTML = data.matches.map(m => `
+      <div class="result-card">
+        <div class="frame-wrap"><img src="/api/image?id=${encodeURIComponent(m.id)}" alt="${m.name}"></div>
+        <div class="meta">
+          <div class="fname">${m.name}</div>
+          <a href="https://drive.google.com/file/d/${m.id}/view" target="_blank" rel="noopener">OPEN IN DRIVE →</a>
+        </div>
+      </div>
+    `).join('');
+    stepResults.style.display = 'block';
+    stepResults.scrollIntoView({behavior:'smooth', block:'nearest'});
+  } catch(err){
+    setStatus(findStatus, 'Search failed: ' + err.message, 'error');
+  } finally { findBtn.disabled = false; }
+}
+
+findBtn.addEventListener('click', () => {
+  const code = codeInput.value.trim();
+  if(!code){ setStatus(findStatus, 'Enter a style code first.', 'error'); return; }
+  performSearch(code);
+});
+
+resetLink.addEventListener('click', () => {
+  stopScanning();
+  scanBox.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M3 7h3l1.5-2h9L18 7h3v13H3V7z"/><circle cx="12" cy="14" r="3.5"/></svg><div class="cta">Tap to start scanning</div>`;
+  setStatus(scanStatus, '', null);
+  stepCode.style.display = 'none';
+  codeInput.value = '';
+  setStatus(findStatus, '', null);
+  stepResults.style.display = 'none';
+  resultsArea.innerHTML = '';
+  resetLink.style.display = 'none';
+  window.scrollTo({top:0, behavior:'smooth'});
+});
+
+/* ============================================================
+   ORDER SHEET MODE — centralized, shared across every device
+   ============================================================ */
+const stepSavedList = document.getElementById('stepSavedList');
+const savedListArea = document.getElementById('savedListArea');
+const showUploadBtn = document.getElementById('showUploadBtn');
+const stepUpload = document.getElementById('stepUpload');
+const uploadBox = document.getElementById('uploadBox');
+const sheetFileInput = document.getElementById('sheetFileInput');
+const uploadStatus = document.getElementById('uploadStatus');
+const backToListLink = document.getElementById('backToListLink');
+const backToListLink2 = document.getElementById('backToListLink2');
+const refreshGridLink = document.getElementById('refreshGridLink');
+const stepGrid = document.getElementById('stepGrid');
+const gridTitle = document.getElementById('gridTitle');
+const statOrders = document.getElementById('statOrders');
+const statQty = document.getElementById('statQty');
+const statTicked = document.getElementById('statTicked');
+const reviewProgressFill = document.getElementById('reviewProgressFill');
+const gridArea = document.getElementById('gridArea');
+
+let currentSheet = null;   // { id, filename, uploadedAt, orders: [{styleCode, ageRaw, ageDisplay, qty, fulfilled}] }
+let driveCache = {};       // styleCode -> matches array (avoid re-searching Drive for repeats)
+let gridObserver = null;
+
+// Decode an age suffix like "34" -> "3-4", "912" -> "9-12", "1218" -> "12-18"
+function decodeAge(suffix){
+  const s = (suffix || '').replace(/\D/g, '');
+  if(s.length === 2) return `${s[0]}-${s[1]}`;
+  if(s.length === 3) return `${s[0]}-${s.slice(1)}`;
+  if(s.length === 4) return `${s.slice(0,2)}-${s.slice(2)}`;
+  return s || '—';
+}
+
+// A cell looks like a style code if it's letters+digits with a hyphen,
+// e.g. "BLPTSBL343-34" — and isn't a label like "Row Labels" or "Grand Total".
+function looksLikeStyleCode(val){
+  if(typeof val !== 'string') return false;
+  const v = val.trim();
+  if(!v || v.length < 5) return false;
+  if(/^(row labels?|grand total|total|qty|quantity|column labels?)$/i.test(v)) return false;
+  return /^[A-Za-z]{2,}[A-Za-z0-9]*-[A-Za-z0-9]+$/.test(v);
+}
+
+function looksLikeQty(val){
+  if(typeof val === 'number') return Number.isFinite(val) && val >= 0;
+  if(typeof val === 'string') return /^\d+(\.\d+)?$/.test(val.trim());
+  return false;
+}
+
+function parseWorkbook(workbook){
+  const found = [];
+  workbook.SheetNames.forEach((sheetName) => {
+    const ws = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    rows.forEach((row) => {
+      for(let c = 0; c < row.length - 1; c++){
+        const cell = row[c];
+        const next = row[c + 1];
+        if(looksLikeStyleCode(cell) && looksLikeQty(next)){
+          const raw = String(cell).trim();
+          const dashIdx = raw.lastIndexOf('-');
+          const styleCode = raw.slice(0, dashIdx);
+          const ageRaw = raw.slice(dashIdx + 1);
+          found.push({
+            styleCode,
+            ageRaw,
+            ageDisplay: decodeAge(ageRaw),
+            qty: Math.round(Number(next)),
+            fulfilled: false
+          });
+        }
+      }
+    });
+  });
+  return found;
+}
+
+function setUploadStatus(msg, kind){
+  if(!msg){ uploadStatus.innerHTML = ''; return; }
+  if(kind==='error'){ uploadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
+  else if(kind==='loading'){ uploadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
+  else { uploadStatus.innerHTML = `<div class="status-line" style="color:var(--green)">${msg}</div>`; }
+}
+
+function showSavedList(){
+  currentSheet = null;
+  stepSavedList.style.display = 'block';
+  stepUpload.style.display = 'none';
+  stepGrid.style.display = 'none';
+  loadSavedList();
+}
+
+function showUploadStep(){
+  stepSavedList.style.display = 'none';
+  stepUpload.style.display = 'block';
+  stepGrid.style.display = 'none';
+}
+
+showUploadBtn.addEventListener('click', showUploadStep);
+backToListLink.addEventListener('click', showSavedList);
+backToListLink2.addEventListener('click', showSavedList);
+refreshGridLink.addEventListener('click', () => { if(currentSheet) openSheet(currentSheet.id); });
+
+async function loadSavedList(){
+  savedListArea.innerHTML = `<div class="status-line"><span class="spin"></span>Loading saved sheets…</div>`;
+  try{
+    const res = await fetch('/api/sheets');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error ? (data.error.message || JSON.stringify(data.error)) : 'Load failed');
+    const list = data.sheets || [];
+    if(list.length === 0){
+      savedListArea.innerHTML = `<div class="status-line">No sheets uploaded yet — upload one below.</div>`;
+      return;
+    }
+    savedListArea.innerHTML = list.map(s => `
+      <div class="saved-item" data-id="${s.id}">
+        <div>
+          <div class="si-name">${s.filename}</div>
+          <div class="si-meta">${s.orderCount} orders • ${s.totalQty} qty • ${s.tickedCount || 0} fulfilled • ${new Date(s.uploadedAt).toLocaleString()}</div>
+        </div>
+        <div class="si-arrow">→</div>
+      </div>
+    `).join('');
+    savedListArea.querySelectorAll('.saved-item').forEach(el => {
+      el.addEventListener('click', () => openSheet(el.dataset.id));
+    });
+  } catch(err){
+    savedListArea.innerHTML = `<div class="error-box">Couldn't load saved sheets: ${err.message}</div>`;
+  }
+}
+
+uploadBox.addEventListener('click', () => sheetFileInput.click());
+
+sheetFileInput.addEventListener('change', async () => {
+  const file = sheetFileInput.files[0];
+  if(!file) return;
+  setUploadStatus('Reading sheet…', 'loading');
+  try{
+    let workbook;
+    if(/\.csv$/i.test(file.name)){
+      const text = await file.text();
+      workbook = XLSX.read(text, { type: 'string' });
+    } else {
+      const buf = await file.arrayBuffer();
+      workbook = XLSX.read(buf, { type: 'array' });
+    }
+    const parsedOrders = parseWorkbook(workbook);
+    if(parsedOrders.length === 0){
+      setUploadStatus("Couldn't find any style codes in that file — check it matches the expected format.", 'error');
+      return;
+    }
+    setUploadStatus(`Found ${parsedOrders.length} order lines. Saving for your team…`, 'loading');
+    const res = await fetch('/api/sheets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, orders: parsedOrders })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error ? (data.error.message || JSON.stringify(data.error)) : 'Save failed');
+    setUploadStatus('Saved — everyone on your team can now see this sheet.', 'ok');
+    sheetFileInput.value = '';
+    openSheet(data.id);
+  } catch(err){
+    setUploadStatus('Failed: ' + err.message, 'error');
+  }
+});
+
+async function openSheet(id){
+  stepSavedList.style.display = 'none';
+  stepUpload.style.display = 'none';
+  stepGrid.style.display = 'block';
+  gridArea.innerHTML = `<div class="status-line"><span class="spin"></span>Loading sheet…</div>`;
+  stepGrid.scrollIntoView({behavior:'smooth', block:'nearest'});
+  try{
+    const res = await fetch('/api/sheet?id=' + encodeURIComponent(id));
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error ? (data.error.message || JSON.stringify(data.error)) : 'Load failed');
+    currentSheet = data;
+    driveCache = {};
+    gridTitle.textContent = data.filename;
+    renderGrid();
+  } catch(err){
+    gridArea.innerHTML = `<div class="error-box">Couldn't load sheet: ${err.message}</div>`;
+  }
+}
+
+function updateStats(){
+  if(!currentSheet) return;
+  const ordersList = currentSheet.orders;
+  const totalQty = ordersList.reduce((sum,o)=>sum+(o.qty||0),0);
+  const ticked = ordersList.filter(o=>o.fulfilled).length;
+  statOrders.textContent = ordersList.length;
+  statQty.textContent = totalQty;
+  statTicked.textContent = ticked;
+  reviewProgressFill.style.width = (ordersList.length ? Math.round(ticked/ordersList.length*100) : 0) + '%';
+}
+
+function renderGrid(){
+  updateStats();
+  const ordersList = currentSheet.orders;
+
+  gridArea.innerHTML = ordersList.map((o, i) => `
+    <div class="grid-card ${o.fulfilled ? 'fulfilled' : ''}" data-index="${i}">
+      <div class="gc-image" data-style="${o.styleCode}">
+        <div class="status-line" style="font-size:10px;"><span class="spin"></span></div>
+      </div>
+      <div class="gc-tags">
+        <div class="gc-code">${o.styleCode}</div>
+        <div class="gc-meta"><span>Age ${o.ageDisplay}</span><span>Qty ${o.qty}</span></div>
+      </div>
+      <button class="gc-fulfill-btn">${o.fulfilled ? '✓ Fulfilled' : 'Mark fulfilled'}</button>
+    </div>
+  `).join('');
+
+  gridArea.querySelectorAll('.gc-fulfill-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.closest('.grid-card').dataset.index);
+      toggleFulfilled(idx);
+    });
+  });
+
+  // Lazy-load each product image only once its card scrolls into view
+  if(gridObserver) gridObserver.disconnect();
+  gridObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if(entry.isIntersecting){
+        loadCardImage(entry.target);
+        gridObserver.unobserve(entry.target);
+      }
+    });
+  }, { rootMargin: '200px' });
+  gridArea.querySelectorAll('.gc-image').forEach(el => gridObserver.observe(el));
+}
+
+async function loadCardImage(imgContainer){
+  const styleCode = imgContainer.dataset.style;
+  try{
+    let matches = driveCache[styleCode];
+    if(!matches){
+      const data = await callApi('/api/find-image', { styleCode });
+      matches = data.matches || [];
+      driveCache[styleCode] = matches;
+    }
+    if(matches.length === 0){
+      imgContainer.innerHTML = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);padding:6px;text-align:center;">No image</div>`;
+    } else {
+      imgContainer.innerHTML = `<img src="/api/image?id=${encodeURIComponent(matches[0].id)}" alt="${styleCode}">`;
+    }
+  } catch(err){
+    imgContainer.innerHTML = `<div style="font-family:var(--mono);font-size:9px;color:var(--red);padding:6px;text-align:center;">Error</div>`;
+  }
+}
+
+async function toggleFulfilled(idx){
+  const o = currentSheet.orders[idx];
+  const newVal = !o.fulfilled;
+  o.fulfilled = newVal; // optimistic UI update — don't wait on the network
+  const card = gridArea.querySelector(`.grid-card[data-index="${idx}"]`);
+  if(card){
+    card.classList.toggle('fulfilled', newVal);
+    card.querySelector('.gc-fulfill-btn').textContent = newVal ? '✓ Fulfilled' : 'Mark fulfilled';
+  }
+  updateStats();
+
+  try{
+    const res = await fetch('/api/sheet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: currentSheet.id, index: idx, fulfilled: newVal })
+    });
+    if(!res.ok) throw new Error('Save failed');
+  } catch(err){
+    // revert on failure so the UI never lies about what's actually saved
+    o.fulfilled = !newVal;
+    if(card){
+      card.classList.toggle('fulfilled', !newVal);
+      card.querySelector('.gc-fulfill-btn').textContent = !newVal ? '✓ Fulfilled' : 'Mark fulfilled';
+    }
+    updateStats();
+  }
+}
+
+// Load the saved-sheets list the first time someone opens this tab
+let sheetTabInitialized = false;
+tabSheet.addEventListener('click', () => {
+  if(!sheetTabInitialized){
+    sheetTabInitialized = true;
+    showSavedList();
+  }
+});
+</script>
+</body>
+</html>
