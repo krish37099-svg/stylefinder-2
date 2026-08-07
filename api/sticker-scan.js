@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 import { kv } from '@vercel/kv';
 
 const MAX_UNKNOWN_PER_CALL = 24; // how many not-yet-seen style codes to process in one request
-const CONCURRENCY = 5;           // parallel Gemini calls at a time
+const CONCURRENCY = 3;           // parallel Gemini calls at a time (kept modest to avoid rate limits)
 
 function escapeQuery(s) {
   return s.replace(/'/g, "\\'");
@@ -115,8 +115,8 @@ async function extractSticker(base64, mimeType) {
           text:
 `This is a product photo of a kids' garment with a printed/pasted graphic "sticker" on it. Look ONLY at the printed design — completely ignore the garment's fabric color, garment type, background, and any "100% cotton" logo badge.
 
-- "stickerText": transcribe any text that is part of the printed design, EXACTLY as printed, including any spelling mistakes, letter-for-letter (e.g. if it says "Independencee" with a double e, write it that way). Empty string if the design has no text.
-- "stickerMotif": if there is a graphic/illustration element (a character, animal, icon), describe it in 3-6 words (e.g. "penguin holding red scarf"). Empty string if the design is text-only with no illustration.
+- "stickerText": transcribe EVERY piece of text and every number/date in the design, in reading order, separated by single spaces. This includes stylized, oversized, or artistically-drawn numbers and dates (e.g. a large decorative "15" with the word "AUGUST" underneath) — always treat those as text too, never as a pure illustration. Transcribe exactly as printed, letter-for-letter and digit-for-digit, including any spelling mistakes. Only use an empty string if the design truly has zero text or numbers anywhere on it.
+- "stickerMotif": describe in 3-6 words any character, animal, or icon illustration that is a SEPARATE element from the text (e.g. "penguin holding red scarf", "elephant with flower"). Decorative swirls, brush strokes, or flourishes that are just part of the text's styling are NOT a motif — leave this empty string unless there's a distinct character/animal/icon.
 - "hasSticker": true if there is any printed design at all on the garment.`
         },
         { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64 } }
@@ -128,13 +128,18 @@ async function extractSticker(base64, mimeType) {
     }
   };
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const apiRes = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
+      if (!apiRes.ok) {
+        // rate limited or transient error — back off before retrying
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+        continue;
+      }
       const data = await apiRes.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (text) {
@@ -142,7 +147,7 @@ async function extractSticker(base64, mimeType) {
         if (typeof parsed.stickerText === 'string' || typeof parsed.stickerMotif === 'string') return parsed;
       }
     } catch (e) {
-      // retry once
+      await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
     }
   }
   return null;
@@ -292,7 +297,7 @@ export default async function handler(req, res) {
       noImage: [...new Set([...noImage, ...stillNoImage])],
       remainingUnknown,
       scanWarning,
-      _engine: 'ocr-text-match-v1'
+      _engine: 'ocr-text-match-v2'
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
