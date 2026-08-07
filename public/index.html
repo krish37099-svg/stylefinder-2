@@ -7,6 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <style>
   :root{
     --bg:#15171a;
@@ -227,7 +228,10 @@
       </div>
       <div class="progress-bar-track"><div class="progress-bar-fill" id="reviewProgressFill"></div></div>
       <div id="gridArea" class="order-grid"></div>
-      <button class="btn btn-ghost" id="downloadSheetBtn" style="margin-top:14px;width:100%;">⬇ Download as Excel (with images)</button>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button class="btn btn-ghost" id="downloadSheetBtn" style="flex:1;">⬇ Excel (with images)</button>
+        <button class="btn btn-ghost" id="downloadPdfBtn" style="flex:1;">⬇ PDF</button>
+      </div>
       <div id="downloadStatus"></div>
       <div class="link-btn" id="refreshGridLink">↻ Refresh from server</div>
       <div class="link-btn" id="backToListLink2">← Back to saved sheets</div>
@@ -840,25 +844,40 @@ async function fetchImageAsBase64(fileId){
   return result;
 }
 
+async function ensureDriveCacheForOrders(orders, onStatus){
+  onStatus && onStatus('Looking up product images…');
+  const uncachedCodes = [...new Set(orders.map(o => o.styleCode))].filter(c => !driveCache[c]);
+  for (let i = 0; i < uncachedCodes.length; i += 5){
+    const batch = uncachedCodes.slice(i, i + 5);
+    await Promise.all(batch.map(async (code) => {
+      try{
+        const data = await callApi('/api/find-image', { styleCode: code });
+        driveCache[code] = data.matches || [];
+      } catch(e){ driveCache[code] = []; }
+    }));
+  }
+}
+
+async function normalizeToPngDataUrl(dataUrl){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || 1; canvas.height = img.naturalHeight || 1;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
 downloadSheetBtn.addEventListener('click', async () => {
   if(!currentSheet || !currentSheet.orders || currentSheet.orders.length === 0) return;
   downloadSheetBtn.disabled = true;
   try{
     const orders = currentSheet.orders;
-
-    // Make sure every style code has a Drive lookup done (reuses driveCache — cards already
-    // on screen are usually already cached, this just fills in any that never scrolled into view)
-    setDownloadStatus('Looking up product images…', 'loading');
-    const uncachedCodes = [...new Set(orders.map(o => o.styleCode))].filter(c => !driveCache[c]);
-    for (let i = 0; i < uncachedCodes.length; i += 5){
-      const batch = uncachedCodes.slice(i, i + 5);
-      await Promise.all(batch.map(async (code) => {
-        try{
-          const data = await callApi('/api/find-image', { styleCode: code });
-          driveCache[code] = data.matches || [];
-        } catch(e){ driveCache[code] = []; }
-      }));
-    }
+    await ensureDriveCacheForOrders(orders, (msg) => setDownloadStatus(msg, 'loading'));
 
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Orders');
@@ -915,6 +934,92 @@ downloadSheetBtn.addEventListener('click', async () => {
     setDownloadStatus('Download failed: ' + err.message, 'error');
   } finally {
     downloadSheetBtn.disabled = false;
+  }
+});
+
+const downloadPdfBtn = document.getElementById('downloadPdfBtn');
+
+downloadPdfBtn.addEventListener('click', async () => {
+  if(!currentSheet || !currentSheet.orders || currentSheet.orders.length === 0) return;
+  downloadPdfBtn.disabled = true;
+  try{
+    const orders = currentSheet.orders;
+    await ensureDriveCacheForOrders(orders, (msg) => setDownloadStatus(msg, 'loading'));
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const pageWidth = 210, pageHeight = 297, margin = 14;
+    const colImg = margin, colCode = margin + 22, colAge = margin + 92, colQty = margin + 122, colFul = margin + 148;
+    const rowHeight = 20;
+    let y = margin;
+
+    function drawHeaderBlock(){
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(14);
+      doc.text(currentSheet.filename || 'Order Sheet', margin, y);
+      y += 7;
+      doc.setFontSize(9);
+      doc.setFont(undefined, 'normal');
+      const totalQty = orders.reduce((s, o) => s + (Number(o.qty) || 0), 0);
+      doc.text(`${orders.length} orders  •  ${totalQty} total qty`, margin, y);
+      y += 8;
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(9);
+      doc.text('Image', colImg, y);
+      doc.text('Style Code', colCode, y);
+      doc.text('Age', colAge, y);
+      doc.text('Qty', colQty, y);
+      doc.text('Fulfilled', colFul, y);
+      y += 3;
+      doc.setDrawColor(180);
+      doc.line(margin, y, pageWidth - margin, y);
+      y += 4;
+      doc.setFont(undefined, 'normal');
+    }
+
+    drawHeaderBlock();
+
+    let imagesDone = 0;
+    const totalWithImages = orders.filter(o => (driveCache[o.styleCode] || []).length > 0).length;
+
+    for (let i = 0; i < orders.length; i++){
+      const o = orders[i];
+      if(y + rowHeight > pageHeight - margin){
+        doc.addPage();
+        y = margin;
+        drawHeaderBlock();
+      }
+
+      const matches = driveCache[o.styleCode] || [];
+      if(matches.length > 0){
+        try{
+          setDownloadStatus(`Building PDF… (${imagesDone + 1}/${totalWithImages})`, 'loading');
+          const { base64, extension } = await fetchImageAsBase64(matches[0].id);
+          const pngDataUrl = await normalizeToPngDataUrl(`data:image/${extension};base64,${base64}`);
+          doc.addImage(pngDataUrl, 'PNG', colImg, y, 16, 16);
+          imagesDone++;
+        } catch(e){ /* skip the thumbnail if one image fails, keep going */ }
+      }
+
+      const textY = y + 9;
+      doc.setFontSize(10);
+      doc.text(String(o.styleCode || ''), colCode, textY);
+      doc.text(String(o.ageDisplay || ''), colAge, textY);
+      doc.text(String(o.qty ?? ''), colQty, textY);
+      doc.text(o.fulfilled ? 'Yes' : 'No', colFul, textY);
+
+      y += rowHeight;
+    }
+
+    const safeName = (currentSheet.filename || 'orders').replace(/\.[^.]+$/, '');
+    doc.save(`${safeName}-export.pdf`);
+
+    setDownloadStatus('Downloaded.', 'ok');
+    setTimeout(() => setDownloadStatus('', null), 2500);
+  } catch(err){
+    setDownloadStatus('PDF download failed: ' + err.message, 'error');
+  } finally {
+    downloadPdfBtn.disabled = false;
   }
 });
 
