@@ -858,14 +858,23 @@ async function ensureDriveCacheForOrders(orders, onStatus){
   }
 }
 
-async function normalizeToPngDataUrl(dataUrl){
+const pdfImageCache = {}; // driveFileId -> shrunk JPEG data URL, avoids re-resizing repeated style codes
+
+async function shrinkImageForPdf(dataUrl, maxDimPx){
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
+      const w = img.naturalWidth || 1, h = img.naturalHeight || 1;
+      const scale = Math.min(1, maxDimPx / Math.max(w, h));
       const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth || 1; canvas.height = img.naturalHeight || 1;
-      canvas.getContext('2d').drawImage(img, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
+      canvas.width = Math.max(1, Math.round(w * scale));
+      canvas.height = Math.max(1, Math.round(h * scale));
+      const ctx = canvas.getContext('2d');
+      // flatten onto white first — source PNGs with transparency turn black once forced to JPEG otherwise
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.72));
     };
     img.onerror = reject;
     img.src = dataUrl;
@@ -994,9 +1003,13 @@ downloadPdfBtn.addEventListener('click', async () => {
       if(matches.length > 0){
         try{
           setDownloadStatus(`Building PDF… (${imagesDone + 1}/${totalWithImages})`, 'loading');
-          const { base64, extension } = await fetchImageAsBase64(matches[0].id);
-          const pngDataUrl = await normalizeToPngDataUrl(`data:image/${extension};base64,${base64}`);
-          doc.addImage(pngDataUrl, 'PNG', colImg, y, 16, 16);
+          let pngDataUrl = pdfImageCache[matches[0].id];
+          if(!pngDataUrl){
+            const { base64, extension } = await fetchImageAsBase64(matches[0].id);
+            pngDataUrl = await shrinkImageForPdf(`data:image/${extension};base64,${base64}`, 160);
+            pdfImageCache[matches[0].id] = pngDataUrl;
+          }
+          doc.addImage(pngDataUrl, 'JPEG', colImg, y, 16, 16, undefined, 'FAST');
           imagesDone++;
         } catch(e){ /* skip the thumbnail if one image fails, keep going */ }
       }
