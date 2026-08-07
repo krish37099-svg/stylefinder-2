@@ -6,6 +6,7 @@
 <title>Style Finder</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <style>
   :root{
     --bg:#15171a;
@@ -226,6 +227,8 @@
       </div>
       <div class="progress-bar-track"><div class="progress-bar-fill" id="reviewProgressFill"></div></div>
       <div id="gridArea" class="order-grid"></div>
+      <button class="btn btn-ghost" id="downloadSheetBtn" style="margin-top:14px;width:100%;">⬇ Download as Excel (with images)</button>
+      <div id="downloadStatus"></div>
       <div class="link-btn" id="refreshGridLink">↻ Refresh from server</div>
       <div class="link-btn" id="backToListLink2">← Back to saved sheets</div>
     </div>
@@ -807,6 +810,113 @@ async function toggleFulfilled(idx){
     updateStats();
   }
 }
+
+const downloadSheetBtn = document.getElementById('downloadSheetBtn');
+const downloadStatus = document.getElementById('downloadStatus');
+const imageBlobCache = {}; // driveFileId -> { base64, extension }
+
+function setDownloadStatus(msg, kind){
+  if(!msg){ downloadStatus.innerHTML = ''; return; }
+  if(kind==='error'){ downloadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
+  else if(kind==='loading'){ downloadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
+  else { downloadStatus.innerHTML = `<div class="status-line" style="color:var(--green)">${msg}</div>`; }
+}
+
+async function fetchImageAsBase64(fileId){
+  if(imageBlobCache[fileId]) return imageBlobCache[fileId];
+  const res = await fetch(`/api/image?id=${encodeURIComponent(fileId)}`);
+  if(!res.ok) throw new Error('image fetch failed');
+  const blob = await res.blob();
+  const contentType = blob.type || 'image/png';
+  const extension = contentType.includes('png') ? 'png' : (contentType.includes('gif') ? 'gif' : 'jpeg');
+  const base64 = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+  const result = { base64, extension };
+  imageBlobCache[fileId] = result;
+  return result;
+}
+
+downloadSheetBtn.addEventListener('click', async () => {
+  if(!currentSheet || !currentSheet.orders || currentSheet.orders.length === 0) return;
+  downloadSheetBtn.disabled = true;
+  try{
+    const orders = currentSheet.orders;
+
+    // Make sure every style code has a Drive lookup done (reuses driveCache — cards already
+    // on screen are usually already cached, this just fills in any that never scrolled into view)
+    setDownloadStatus('Looking up product images…', 'loading');
+    const uncachedCodes = [...new Set(orders.map(o => o.styleCode))].filter(c => !driveCache[c]);
+    for (let i = 0; i < uncachedCodes.length; i += 5){
+      const batch = uncachedCodes.slice(i, i + 5);
+      await Promise.all(batch.map(async (code) => {
+        try{
+          const data = await callApi('/api/find-image', { styleCode: code });
+          driveCache[code] = data.matches || [];
+        } catch(e){ driveCache[code] = []; }
+      }));
+    }
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Orders');
+    ws.columns = [
+      { header: 'Image', key: 'image', width: 14 },
+      { header: 'Style Code', key: 'styleCode', width: 20 },
+      { header: 'Age', key: 'age', width: 12 },
+      { header: 'Qty', key: 'qty', width: 8 },
+      { header: 'Fulfilled', key: 'fulfilled', width: 12 }
+    ];
+    ws.getRow(1).font = { bold: true };
+
+    let imagesDone = 0;
+    const totalWithImages = orders.filter(o => (driveCache[o.styleCode] || []).length > 0).length;
+
+    for (let i = 0; i < orders.length; i++){
+      const o = orders[i];
+      const rowIndex = i + 2; // header is row 1
+      const row = ws.getRow(rowIndex);
+      row.getCell(2).value = o.styleCode;
+      row.getCell(3).value = o.ageDisplay;
+      row.getCell(4).value = o.qty;
+      row.getCell(5).value = o.fulfilled ? 'Yes' : 'No';
+      row.height = 60;
+
+      const matches = driveCache[o.styleCode] || [];
+      if(matches.length > 0){
+        try{
+          setDownloadStatus(`Embedding images… (${imagesDone + 1}/${totalWithImages})`, 'loading');
+          const { base64, extension } = await fetchImageAsBase64(matches[0].id);
+          const imgId = wb.addImage({ base64: `data:image/${extension};base64,${base64}`, extension });
+          ws.addImage(imgId, { tl: { col: 0, row: rowIndex - 1 }, ext: { width: 70, height: 70 } });
+          imagesDone++;
+        } catch(e){ /* leave the cell blank if a single image fails, don't stop the whole export */ }
+      }
+    }
+
+    setDownloadStatus('Building file…', 'loading');
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safeName = (currentSheet.filename || 'orders').replace(/\.[^.]+$/, '');
+    a.download = `${safeName}-export.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    setDownloadStatus('Downloaded.', 'ok');
+    setTimeout(() => setDownloadStatus('', null), 2500);
+  } catch(err){
+    setDownloadStatus('Download failed: ' + err.message, 'error');
+  } finally {
+    downloadSheetBtn.disabled = false;
+  }
+});
 
 // Load the saved-sheets list the first time someone opens this tab
 let sheetTabInitialized = false;
