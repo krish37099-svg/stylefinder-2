@@ -129,6 +129,11 @@
 
   .gc-image img, .result-card img{cursor:zoom-in;}
 
+  .gc-image{position:relative;}
+  .gc-remove-btn{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,.75);border:1px solid var(--line);color:#fff;font-size:14px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:2;}
+  .gc-remove-btn:active{background:var(--red);}
+  .grid-card.removed{display:none;}
+
   .stk-card{background:var(--panel-2);border:1px solid var(--line);border-radius:2px;display:flex;gap:12px;padding:10px;cursor:pointer;align-items:center;}
   .stk-card:active{opacity:.8;}
   .stk-thumb{width:64px;height:64px;flex-shrink:0;background:#000;border:1px solid var(--line);border-radius:2px;display:flex;align-items:center;justify-content:center;overflow:hidden;}
@@ -167,6 +172,7 @@
     <button class="mode-tab active" id="tabScan">Scan Invoice</button>
     <button class="mode-tab" id="tabSheet">Order Sheet</button>
     <button class="mode-tab" id="tabSticker">Stickers</button>
+    <button class="mode-tab" id="tabPhotos">Photos</button>
   </div>
 
   <!-- =============== SCAN MODE =============== -->
@@ -274,6 +280,36 @@
 
   </div>
 
+  <!-- =============== PHOTO LIST MODE =============== -->
+  <div id="photosMode" style="display:none;">
+
+    <div class="step" id="phStepUpload">
+      <div class="step-label"><span class="num">↑</span> Upload order sheet</div>
+      <label class="upload-box" id="phUploadBox" for="phFileInput">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M12 3v12m0-12l-4 4m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+        <div class="cta">Tap to upload .xlsx or .csv</div>
+        <div class="hint">Fetches the product photo for every unique style code in the sheet as a grid. Remove any you don't want, then download the rest as one photo + style code per row.</div>
+      </label>
+      <input type="file" id="phFileInput" accept=".xlsx,.xls,.csv" style="display:none;">
+      <div id="phUploadStatus"></div>
+    </div>
+
+    <div class="step" id="phStepGrid" style="display:none;">
+      <div class="step-label"><span class="num">▦</span> Photos</div>
+      <div class="stats-row">
+        <div class="stat-box"><div class="n" id="phStatTotal">0</div><div class="l">Found</div></div>
+        <div class="stat-box"><div class="n" id="phStatRemaining">0</div><div class="l">Remaining</div></div>
+        <div class="stat-box"><div class="n" id="phStatRemoved">0</div><div class="l">Removed</div></div>
+      </div>
+      <div id="phGridArea" class="order-grid"></div>
+      <div id="phNoImageArea"></div>
+      <button class="btn btn-ghost" id="phDownloadBtn" style="width:100%;margin-top:14px;">⬇ Download remaining photos (PDF)</button>
+      <div id="phDownloadStatus"></div>
+      <div class="link-btn" id="phBackLink">← Upload a different sheet</div>
+    </div>
+
+  </div>
+
 </div>
 
 <div class="lightbox" id="lightbox">
@@ -332,22 +368,26 @@ async function callApi(path, body){
 const tabScan = document.getElementById('tabScan');
 const tabSheet = document.getElementById('tabSheet');
 const tabSticker = document.getElementById('tabSticker');
+const tabPhotos = document.getElementById('tabPhotos');
 const scanMode = document.getElementById('scanMode');
 const sheetMode = document.getElementById('sheetMode');
 const stickerMode = document.getElementById('stickerMode');
+const photosMode = document.getElementById('photosMode');
 const headerSub = document.getElementById('headerSub');
 
 function setActiveTab(tab){
-  [tabScan, tabSheet, tabSticker].forEach(t => t.classList.toggle('active', t === tab));
+  [tabScan, tabSheet, tabSticker, tabPhotos].forEach(t => t.classList.toggle('active', t === tab));
   scanMode.style.display = tab === tabScan ? 'block' : 'none';
   sheetMode.style.display = tab === tabSheet ? 'block' : 'none';
   stickerMode.style.display = tab === tabSticker ? 'block' : 'none';
+  photosMode.style.display = tab === tabPhotos ? 'block' : 'none';
   if(tab !== tabScan) stopScanning();
 }
 
 tabScan.addEventListener('click', () => { setActiveTab(tabScan); headerSub.textContent = 'LIVE SCAN'; });
 tabSheet.addEventListener('click', () => { setActiveTab(tabSheet); headerSub.textContent = 'ORDER SHEET'; });
 tabSticker.addEventListener('click', () => { setActiveTab(tabSticker); headerSub.textContent = 'STICKER GROUPS'; });
+tabPhotos.addEventListener('click', () => { setActiveTab(tabPhotos); headerSub.textContent = 'PHOTOS'; });
 
 /* ============================================================
    SCAN MODE (invoice camera scanner)
@@ -1205,6 +1245,184 @@ stBackLink.addEventListener('click', () => {
   stStepDetail.style.display = 'none';
   stStepUpload.style.display = 'block';
   setStUploadStatus('', null);
+});
+
+/* ============================================================
+   PHOTO LIST MODE
+   ============================================================ */
+const phUploadBox = document.getElementById('phUploadBox');
+const phFileInput = document.getElementById('phFileInput');
+const phUploadStatus = document.getElementById('phUploadStatus');
+const phStepUpload = document.getElementById('phStepUpload');
+const phStepGrid = document.getElementById('phStepGrid');
+const phGridArea = document.getElementById('phGridArea');
+const phNoImageArea = document.getElementById('phNoImageArea');
+const phStatTotal = document.getElementById('phStatTotal');
+const phStatRemaining = document.getElementById('phStatRemaining');
+const phStatRemoved = document.getElementById('phStatRemoved');
+const phDownloadBtn = document.getElementById('phDownloadBtn');
+const phDownloadStatus = document.getElementById('phDownloadStatus');
+const phBackLink = document.getElementById('phBackLink');
+
+let phItems = [];     // { styleCode, fileId, removed }
+let phNoImage = [];   // style codes with no Drive match
+
+function setPhUploadStatus(msg, kind){
+  if(!msg){ phUploadStatus.innerHTML = ''; return; }
+  if(kind==='error'){ phUploadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
+  else { phUploadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
+}
+
+function setPhDownloadStatus(msg, kind){
+  if(!msg){ phDownloadStatus.innerHTML = ''; return; }
+  if(kind==='error'){ phDownloadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
+  else if(kind==='loading'){ phDownloadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
+  else { phDownloadStatus.innerHTML = `<div class="status-line" style="color:var(--green)">${msg}</div>`; }
+}
+
+phUploadBox.addEventListener('click', () => phFileInput.click());
+
+phFileInput.addEventListener('change', async () => {
+  const file = phFileInput.files[0];
+  if(!file) return;
+  setPhUploadStatus('Reading sheet…');
+  try{
+    let workbook;
+    if(/\.csv$/i.test(file.name)){
+      const text = await file.text();
+      workbook = XLSX.read(text, { type: 'string' });
+    } else {
+      const buf = await file.arrayBuffer();
+      workbook = XLSX.read(buf, { type: 'array' });
+    }
+    const parsedOrders = parseWorkbook(workbook);
+    if(parsedOrders.length === 0){
+      setPhUploadStatus("Couldn't find any style codes in that file — check it matches the expected format.", 'error');
+      return;
+    }
+    const uniqueCodes = [...new Set(parsedOrders.map(o => o.styleCode))];
+    setPhUploadStatus(`Looking up ${uniqueCodes.length} product photo(s)…`);
+    await ensureDriveCacheForOrders(uniqueCodes.map(styleCode => ({ styleCode })), (msg) => setPhUploadStatus(msg));
+
+    phItems = [];
+    phNoImage = [];
+    uniqueCodes.forEach(code => {
+      const matches = driveCache[code] || [];
+      if(matches.length > 0){
+        phItems.push({ styleCode: code, fileId: matches[0].id, removed: false });
+      } else {
+        phNoImage.push(code);
+      }
+    });
+
+    setPhUploadStatus('');
+    renderPhGrid();
+    phStepUpload.style.display = 'none';
+    phStepGrid.style.display = 'block';
+  } catch(err){
+    setPhUploadStatus('Failed: ' + err.message, 'error');
+  } finally {
+    phFileInput.value = '';
+  }
+});
+
+function renderPhGrid(){
+  const remaining = phItems.filter(it => !it.removed);
+  const removedCount = phItems.length - remaining.length;
+  phStatTotal.textContent = phItems.length;
+  phStatRemaining.textContent = remaining.length;
+  phStatRemoved.textContent = removedCount;
+
+  phGridArea.innerHTML = phItems.map((it, i) => `
+    <div class="grid-card ${it.removed ? 'removed' : ''}" data-index="${i}">
+      <div class="gc-image" data-style="${it.styleCode}">
+        <img src="/api/image?id=${encodeURIComponent(it.fileId)}" alt="${it.styleCode}" loading="lazy">
+        <button class="gc-remove-btn" data-index="${i}" title="Remove">✕</button>
+      </div>
+      <div class="gc-tags"><div class="gc-code">${it.styleCode}</div></div>
+    </div>
+  `).join('');
+
+  phNoImageArea.innerHTML = phNoImage.length > 0
+    ? `<div class="stk-note"><b>${phNoImage.length}</b> style code(s) had no matching image in Drive: ${phNoImage.slice(0,12).join(', ')}${phNoImage.length>12 ? '…' : ''}</div>`
+    : '';
+}
+
+phGridArea.addEventListener('click', (e) => {
+  const btn = e.target.closest('.gc-remove-btn');
+  if(!btn) return;
+  const idx = Number(btn.dataset.index);
+  if(phItems[idx]){
+    phItems[idx].removed = true;
+    renderPhGrid();
+  }
+});
+
+phBackLink.addEventListener('click', () => {
+  phStepGrid.style.display = 'none';
+  phStepUpload.style.display = 'block';
+  setPhUploadStatus('');
+  setPhDownloadStatus('');
+});
+
+phDownloadBtn.addEventListener('click', async () => {
+  const remaining = phItems.filter(it => !it.removed);
+  if(remaining.length === 0){ setPhDownloadStatus('Nothing left to download — every photo was removed.', 'error'); return; }
+  phDownloadBtn.disabled = true;
+  try{
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const pageWidth = 210, pageHeight = 297, margin = 14;
+    const imgSize = 26;
+    const rowHeight = imgSize + 8;
+    let y = margin;
+
+    function drawHeader(){
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(14);
+      doc.text('Photo List', margin, y);
+      y += 6;
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(9);
+      doc.text(`${remaining.length} photo(s)`, margin, y);
+      y += 6;
+    }
+    drawHeader();
+
+    for (let i = 0; i < remaining.length; i++){
+      const it = remaining[i];
+      if(y + rowHeight > pageHeight - margin){
+        doc.addPage();
+        y = margin;
+        drawHeader();
+      }
+      try{
+        setPhDownloadStatus(`Building PDF… (${i + 1}/${remaining.length})`, 'loading');
+        let imgDataUrl = pdfImageCache[it.fileId];
+        if(!imgDataUrl){
+          const { base64, extension } = await fetchImageAsBase64(it.fileId);
+          imgDataUrl = await shrinkImageForPdf(`data:image/${extension};base64,${base64}`, 260);
+          pdfImageCache[it.fileId] = imgDataUrl;
+        }
+        doc.addImage(imgDataUrl, 'JPEG', margin, y, imgSize, imgSize, undefined, 'FAST');
+      } catch(e){ /* skip this thumbnail, keep the row's text */ }
+
+      doc.setFontSize(12);
+      doc.setFont(undefined, 'bold');
+      doc.text(String(it.styleCode || ''), margin + imgSize + 8, y + imgSize / 2 + 3);
+      doc.setFont(undefined, 'normal');
+
+      y += rowHeight;
+    }
+
+    doc.save('photo-list.pdf');
+    setPhDownloadStatus('Downloaded.', 'ok');
+    setTimeout(() => setPhDownloadStatus(''), 2500);
+  } catch(err){
+    setPhDownloadStatus('Download failed: ' + err.message, 'error');
+  } finally {
+    phDownloadBtn.disabled = false;
+  }
 });
 </script>
 </body>
