@@ -1,0 +1,9 @@
+{
+  "name": "style-finder",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "googleapis": "^140.0.1",
+    "@vercel/kv": "^2.0.0"
+  }
+}
