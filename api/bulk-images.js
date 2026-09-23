@@ -80,7 +80,17 @@ async function resolveStyleCode(drive, styleCode) {
   if (files.length === 0) {
     files = await findDirectImages(drive, styleCode);
   }
-  return files.map((f) => ({ id: f.id, name: f.name }));
+  if (files.length === 0) {
+    // Nothing on Drive for this code — leave it empty rather than guessing,
+    // and say why so the caller can warn about it instead of failing silently.
+    return {
+      images: [],
+      note: folder
+        ? 'A folder named ' + styleCode + ' exists but has no images in it.'
+        : 'No folder or direct image named ' + styleCode + ' was found on Drive.'
+    };
+  }
+  return { images: files.map((f) => ({ id: f.id, name: f.name })), note: '' };
 }
 
 export default async function handler(req, res) {
@@ -106,7 +116,7 @@ export default async function handler(req, res) {
       while (cursor < unique.length) {
         const code = unique[cursor++];
         try {
-          results[code] = { images: await resolveStyleCode(drive, code) };
+          results[code] = await resolveStyleCode(drive, code);
         } catch (e) {
           results[code] = { images: [], error: e.message };
         }
