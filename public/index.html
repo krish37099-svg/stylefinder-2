@@ -6,8 +6,6 @@
 <title>Style Finder</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <style>
   :root{
     --bg:#15171a;
@@ -129,34 +127,35 @@
 
   .gc-image img, .result-card img{cursor:zoom-in;}
 
-  .gc-image{position:relative;}
-  .gc-remove-btn{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,.75);border:1px solid var(--line);color:#fff;font-size:14px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:2;}
-  .gc-remove-btn:active{background:var(--red);}
-  .grid-card.removed{display:none;}
-
-  .stk-card{background:var(--panel-2);border:1px solid var(--line);border-radius:2px;display:flex;gap:12px;padding:10px;cursor:pointer;align-items:center;}
-  .stk-card:active{opacity:.8;}
-  .stk-thumb{width:64px;height:64px;flex-shrink:0;background:#000;border:1px solid var(--line);border-radius:2px;display:flex;align-items:center;justify-content:center;overflow:hidden;}
-  .stk-thumb img{max-width:100%;max-height:100%;object-fit:contain;}
-  .stk-info{flex:1;min-width:0;}
-  .stk-label{font-size:13px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .stk-meta{font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:4px;display:flex;gap:12px;}
-  .stk-meta b{color:var(--amber);}
-  .stk-arrow{color:var(--amber);font-family:var(--mono);flex-shrink:0;}
-
-  .stk-row{background:var(--panel-2);border:1px solid var(--line);border-radius:2px;display:flex;gap:10px;padding:10px;margin-bottom:8px;align-items:center;}
-  .stk-row .stk-thumb{width:48px;height:48px;}
-  .stk-row .code{font-family:var(--mono);font-size:12px;color:var(--amber);font-weight:700;}
-  .stk-row .sub{font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:2px;}
-
-  .stk-note{font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:12px;line-height:1.6;}
-  .stk-note b{color:var(--text);}
-
   .lightbox{position:fixed;inset:0;background:rgba(10,11,13,.94);z-index:1000;display:none;align-items:center;justify-content:center;padding:24px;cursor:zoom-out;}
   .lightbox-inner{max-width:100%;max-height:100%;text-align:center;}
   .lightbox-inner img{max-width:100%;max-height:78vh;object-fit:contain;border-radius:4px;}
   .lightbox-caption{margin-top:14px;font-family:var(--mono);color:var(--amber);font-size:13px;letter-spacing:.02em;}
   .lightbox-close{position:absolute;top:18px;right:18px;width:34px;height:34px;border-radius:50%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);font-size:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+
+  .saved-list-scroll{max-height:56vh;overflow-y:auto;padding-right:4px;margin-right:-4px;}
+
+  .grid-top-bar{display:flex;align-items:center;gap:8px;margin-bottom:12px;}
+  .back-btn{
+    flex-shrink:0;padding:9px 12px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);
+    font-family:var(--mono);font-size:11px;letter-spacing:.03em;border-radius:2px;cursor:pointer;font-weight:700;
+  }
+  .switch-select{
+    flex:1;min-width:0;padding:9px 10px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);
+    font-family:var(--mono);font-size:11px;border-radius:2px;
+  }
+  .back-btn.danger{border-color:var(--red);color:var(--red);}
+
+  .saved-item{display:flex;justify-content:space-between;align-items:center;}
+  .saved-item .si-info{flex:1;min-width:0;}
+  .saved-item .si-actions{display:flex;align-items:center;gap:6px;flex-shrink:0;margin-left:10px;}
+  .si-icon-btn{
+    background:var(--panel);border:1px solid var(--line);color:var(--text-dim);
+    width:30px;height:30px;border-radius:2px;cursor:pointer;font-size:13px;
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  }
+  .si-delete-btn:hover, .si-delete-btn:active{border-color:var(--red);color:var(--red);}
+  .si-download-btn:hover, .si-download-btn:active{border-color:var(--amber);color:var(--amber);}
 </style>
 </head>
 <body>
@@ -171,8 +170,7 @@
   <div class="mode-tabs">
     <button class="mode-tab active" id="tabScan">Scan Invoice</button>
     <button class="mode-tab" id="tabSheet">Order Sheet</button>
-    <button class="mode-tab" id="tabSticker">Stickers</button>
-    <button class="mode-tab" id="tabPhotos">Photos</button>
+    <button class="mode-tab" id="tabExport">Image Export</button>
   </div>
 
   <!-- =============== SCAN MODE =============== -->
@@ -209,7 +207,7 @@
 
     <div class="step" id="stepSavedList">
       <div class="step-label"><span class="num">•</span> Saved sheets — shared with everyone</div>
-      <div id="savedListArea"><div class="status-line"><span class="spin"></span>Loading saved sheets…</div></div>
+      <div id="savedListArea" class="saved-list-scroll"><div class="status-line"><span class="spin"></span>Loading saved sheets…</div></div>
       <button class="btn btn-ghost" id="showUploadBtn" style="margin-top:14px;">+ Upload a new sheet</button>
     </div>
 
@@ -226,6 +224,14 @@
     </div>
 
     <div class="step" id="stepGrid" style="display:none;">
+      <div class="grid-top-bar">
+        <button class="back-btn" id="backToListBtnTop">← Back</button>
+        <button class="back-btn" id="downloadSheetBtn">⬇ Download</button>
+        <button class="back-btn danger" id="deleteSheetBtn">🗑 Delete</button>
+      </div>
+      <select class="switch-select" id="switchSheetSelect" style="margin-bottom:12px;">
+        <option value="">Switch to another sheet…</option>
+      </select>
       <div class="step-label"><span class="num">▦</span> <span id="gridTitle">Orders</span></div>
       <div class="stats-row">
         <div class="stat-box"><div class="n" id="statOrders">0</div><div class="l">Orders</div></div>
@@ -234,78 +240,37 @@
       </div>
       <div class="progress-bar-track"><div class="progress-bar-fill" id="reviewProgressFill"></div></div>
       <div id="gridArea" class="order-grid"></div>
-      <div style="display:flex;gap:10px;margin-top:14px;">
-        <button class="btn btn-ghost" id="downloadSheetBtn" style="flex:1;">⬇ Excel (with images)</button>
-        <button class="btn btn-ghost" id="downloadPdfBtn" style="flex:1;">⬇ PDF</button>
-      </div>
-      <div id="downloadStatus"></div>
       <div class="link-btn" id="refreshGridLink">↻ Refresh from server</div>
       <div class="link-btn" id="backToListLink2">← Back to saved sheets</div>
     </div>
 
   </div>
 
-  <!-- =============== STICKER GROUPING MODE =============== -->
-  <div id="stickerMode" style="display:none;">
+  <!-- =============== IMAGE EXPORT MODE =============== -->
+  <div id="exportMode" style="display:none;">
 
-    <div class="step" id="stStepUpload">
-      <div class="step-label"><span class="num">↑</span> Upload order sheet to scan</div>
-      <label class="upload-box" id="stUploadBox" for="stFileInput">
+    <div class="step" id="exStepUpload">
+      <div class="step-label"><span class="num">1</span> Upload SKU sheet</div>
+      <label class="upload-box" id="exUploadBox" for="exFileInput">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M12 3v12m0-12l-4 4m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
         <div class="cta">Tap to upload .xlsx or .csv</div>
-        <div class="hint">Fetches the image for every ordered style code and groups them by which sticker/print they share. Style codes starting "BL" (not "BLP") are readymade and skipped — only "BLP…" codes are scanned.</div>
+        <div class="hint">First column = SKU (style code + "-" + age group). One row per SKU.</div>
       </label>
-      <input type="file" id="stFileInput" accept=".xlsx,.xls,.csv" style="display:none;">
-      <div id="stUploadStatus"></div>
-      <div class="link-btn" id="stResetLink">Wrong groupings from before? Reset sticker matches &amp; rescan everything</div>
+      <input type="file" id="exFileInput" accept=".xlsx,.xls,.csv" style="display:none;">
+      <div id="exUploadStatus"></div>
     </div>
 
-    <div class="step" id="stStepGroups" style="display:none;">
-      <div class="step-label"><span class="num">▦</span> <span id="stGroupsTitle">Sticker groups</span></div>
+    <div class="step" id="exStepRun" style="display:none;">
+      <div class="step-label"><span class="num">2</span> Fetch images from Drive</div>
       <div class="stats-row">
-        <div class="stat-box"><div class="n" id="stStatGroups">0</div><div class="l">Stickers</div></div>
-        <div class="stat-box"><div class="n" id="stStatOrders">0</div><div class="l">Orders</div></div>
-        <div class="stat-box"><div class="n" id="stStatQty">0</div><div class="l">Total Qty</div></div>
+        <div class="stat-box"><div class="n" id="exStatRows">0</div><div class="l">SKU rows</div></div>
+        <div class="stat-box"><div class="n" id="exStatCodes">0</div><div class="l">Unique styles</div></div>
+        <div class="stat-box"><div class="n" id="exStatImgs">0</div><div class="l">Images found</div></div>
       </div>
-      <div id="stGroupsArea" class="order-grid" style="grid-template-columns:1fr;"></div>
-      <div id="stSkippedArea"></div>
-      <div class="link-btn" id="stBackLink">← Scan a different sheet</div>
-    </div>
-
-    <div class="step" id="stStepDetail" style="display:none;">
-      <div class="step-label"><span class="num">•</span> <span id="stDetailTitle">Sticker</span></div>
-      <div id="stDetailArea"></div>
-      <div class="link-btn" id="stDetailBackLink">← Back to sticker groups</div>
-    </div>
-
-  </div>
-
-  <!-- =============== PHOTO LIST MODE =============== -->
-  <div id="photosMode" style="display:none;">
-
-    <div class="step" id="phStepUpload">
-      <div class="step-label"><span class="num">↑</span> Upload order sheet</div>
-      <label class="upload-box" id="phUploadBox" for="phFileInput">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M12 3v12m0-12l-4 4m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
-        <div class="cta">Tap to upload .xlsx or .csv</div>
-        <div class="hint">Fetches the product photo for every unique style code in the sheet as a grid. Remove any you don't want, then download the rest as one photo + style code per row.</div>
-      </label>
-      <input type="file" id="phFileInput" accept=".xlsx,.xls,.csv" style="display:none;">
-      <div id="phUploadStatus"></div>
-    </div>
-
-    <div class="step" id="phStepGrid" style="display:none;">
-      <div class="step-label"><span class="num">▦</span> Photos</div>
-      <div class="stats-row">
-        <div class="stat-box"><div class="n" id="phStatTotal">0</div><div class="l">Found</div></div>
-        <div class="stat-box"><div class="n" id="phStatRemaining">0</div><div class="l">Remaining</div></div>
-        <div class="stat-box"><div class="n" id="phStatRemoved">0</div><div class="l">Removed</div></div>
-      </div>
-      <div id="phGridArea" class="order-grid"></div>
-      <div id="phNoImageArea"></div>
-      <button class="btn btn-ghost" id="phDownloadBtn" style="width:100%;margin-top:14px;">⬇ Download remaining photos (PDF)</button>
-      <div id="phDownloadStatus"></div>
-      <div class="link-btn" id="phBackLink">← Upload a different sheet</div>
+      <div class="progress-bar-track"><div class="progress-bar-fill" id="exProgressFill"></div></div>
+      <div class="progress-text" id="exProgressText"></div>
+      <button class="btn btn-primary" id="exDownloadBtn" style="display:none;">⬇ Download result sheet</button>
+      <div class="link-btn" id="exResetLink">← Upload a different sheet</div>
     </div>
 
   </div>
@@ -342,7 +307,7 @@ lightbox.addEventListener('click', closeLightbox);
 lightboxClose.addEventListener('click', closeLightbox);
 
 document.addEventListener('click', (e) => {
-  const img = e.target.closest('.gc-image img, .result-card img, .stk-thumb img');
+  const img = e.target.closest('.gc-image img, .result-card img');
   if(img){ openLightbox(img.src, img.alt || ''); }
 });
 
@@ -367,27 +332,21 @@ async function callApi(path, body){
    ============================================================ */
 const tabScan = document.getElementById('tabScan');
 const tabSheet = document.getElementById('tabSheet');
-const tabSticker = document.getElementById('tabSticker');
-const tabPhotos = document.getElementById('tabPhotos');
 const scanMode = document.getElementById('scanMode');
 const sheetMode = document.getElementById('sheetMode');
-const stickerMode = document.getElementById('stickerMode');
-const photosMode = document.getElementById('photosMode');
 const headerSub = document.getElementById('headerSub');
 
-function setActiveTab(tab){
-  [tabScan, tabSheet, tabSticker, tabPhotos].forEach(t => t.classList.toggle('active', t === tab));
-  scanMode.style.display = tab === tabScan ? 'block' : 'none';
-  sheetMode.style.display = tab === tabSheet ? 'block' : 'none';
-  stickerMode.style.display = tab === tabSticker ? 'block' : 'none';
-  photosMode.style.display = tab === tabPhotos ? 'block' : 'none';
-  if(tab !== tabScan) stopScanning();
-}
-
-tabScan.addEventListener('click', () => { setActiveTab(tabScan); headerSub.textContent = 'LIVE SCAN'; });
-tabSheet.addEventListener('click', () => { setActiveTab(tabSheet); headerSub.textContent = 'ORDER SHEET'; });
-tabSticker.addEventListener('click', () => { setActiveTab(tabSticker); headerSub.textContent = 'STICKER GROUPS'; });
-tabPhotos.addEventListener('click', () => { setActiveTab(tabPhotos); headerSub.textContent = 'PHOTOS'; });
+tabScan.addEventListener('click', () => {
+  tabScan.classList.add('active'); tabSheet.classList.remove('active');
+  scanMode.style.display = 'block'; sheetMode.style.display = 'none';
+  headerSub.textContent = 'LIVE SCAN';
+});
+tabSheet.addEventListener('click', () => {
+  tabSheet.classList.add('active'); tabScan.classList.remove('active');
+  sheetMode.style.display = 'block'; scanMode.style.display = 'none';
+  headerSub.textContent = 'ORDER SHEET';
+  stopScanning();
+});
 
 /* ============================================================
    SCAN MODE (invoice camera scanner)
@@ -585,6 +544,10 @@ const uploadStatus = document.getElementById('uploadStatus');
 const backToListLink = document.getElementById('backToListLink');
 const backToListLink2 = document.getElementById('backToListLink2');
 const refreshGridLink = document.getElementById('refreshGridLink');
+const backToListBtnTop = document.getElementById('backToListBtnTop');
+const switchSheetSelect = document.getElementById('switchSheetSelect');
+const downloadSheetBtn = document.getElementById('downloadSheetBtn');
+const deleteSheetBtn = document.getElementById('deleteSheetBtn');
 const stepGrid = document.getElementById('stepGrid');
 const gridTitle = document.getElementById('gridTitle');
 const statOrders = document.getElementById('statOrders');
@@ -613,7 +576,7 @@ function looksLikeStyleCode(val){
   const v = val.trim();
   if(!v || v.length < 5) return false;
   if(/^(row labels?|grand total|total|qty|quantity|column labels?)$/i.test(v)) return false;
-  return /^[A-Za-z]{2,}[A-Za-z0-9]*-[A-Za-z0-9]+$/.test(v);
+  return /^[A-Za-z]{2,}[A-Za-z0-9]*-+[A-Za-z0-9]+$/.test(v);
 }
 
 function looksLikeQty(val){
@@ -634,7 +597,7 @@ function parseWorkbook(workbook){
         if(looksLikeStyleCode(cell) && looksLikeQty(next)){
           const raw = String(cell).trim();
           const dashIdx = raw.lastIndexOf('-');
-          const styleCode = raw.slice(0, dashIdx);
+          const styleCode = raw.slice(0, dashIdx).replace(/-+$/, '');
           const ageRaw = raw.slice(dashIdx + 1);
           found.push({
             styleCode,
@@ -674,7 +637,83 @@ function showUploadStep(){
 showUploadBtn.addEventListener('click', showUploadStep);
 backToListLink.addEventListener('click', showSavedList);
 backToListLink2.addEventListener('click', showSavedList);
+backToListBtnTop.addEventListener('click', showSavedList);
 refreshGridLink.addEventListener('click', () => { if(currentSheet) openSheet(currentSheet.id); });
+
+switchSheetSelect.addEventListener('change', () => {
+  const id = switchSheetSelect.value;
+  if(id && id !== (currentSheet && currentSheet.id)){
+    openSheet(id);
+  }
+});
+
+async function populateSwitchDropdown(activeId){
+  try{
+    const res = await fetch('/api/sheets');
+    const data = await res.json();
+    const list = data.sheets || [];
+    switchSheetSelect.innerHTML = '<option value="">Switch to another sheet…</option>' +
+      list.map(s => `<option value="${s.id}" ${s.id === activeId ? 'selected' : ''}>${s.filename} (${s.orderCount} orders)</option>`).join('');
+  } catch(err){
+    // non-critical — dropdown just stays with its default option
+  }
+}
+
+function csvCell(v){
+  return `"${String(v).replace(/"/g, '""')}"`;
+}
+
+function triggerCsvDownload(sheetDoc){
+  const rows = [['Style Code', 'Age', 'Quantity', 'Fulfilled']];
+  sheetDoc.orders.forEach(o => rows.push([o.styleCode, o.ageDisplay, o.qty, o.fulfilled ? 'Yes' : 'No']));
+  const csv = rows.map(r => r.map(csvCell).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = sheetDoc.filename.replace(/\.(xlsx|xls|csv)$/i, '') + '_export.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadSheetById(id){
+  try{
+    // reuse the already-loaded sheet if we're looking at it, otherwise fetch it
+    if(currentSheet && currentSheet.id === id){
+      triggerCsvDownload(currentSheet);
+      return;
+    }
+    const res = await fetch('/api/sheet?id=' + encodeURIComponent(id));
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error ? (data.error.message || JSON.stringify(data.error)) : 'Download failed');
+    triggerCsvDownload(data);
+  } catch(err){
+    alert('Failed to download: ' + err.message);
+  }
+}
+
+async function deleteSheetById(id, onDone){
+  try{
+    const res = await fetch('/api/sheet?id=' + encodeURIComponent(id), { method: 'DELETE' });
+    if(!res.ok){
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error ? (data.error.message || JSON.stringify(data.error)) : 'Delete failed');
+    }
+    if(onDone) onDone();
+  } catch(err){
+    alert('Failed to delete: ' + err.message);
+  }
+}
+
+downloadSheetBtn.addEventListener('click', () => { if(currentSheet) downloadSheetById(currentSheet.id); });
+deleteSheetBtn.addEventListener('click', () => {
+  if(!currentSheet) return;
+  if(confirm(`Delete "${currentSheet.filename}" for everyone? This cannot be undone.`)){
+    deleteSheetById(currentSheet.id, () => showSavedList());
+  }
+});
 
 async function loadSavedList(){
   savedListArea.innerHTML = `<div class="status-line"><span class="spin"></span>Loading saved sheets…</div>`;
@@ -689,15 +728,34 @@ async function loadSavedList(){
     }
     savedListArea.innerHTML = list.map(s => `
       <div class="saved-item" data-id="${s.id}">
-        <div>
+        <div class="si-info">
           <div class="si-name">${s.filename}</div>
           <div class="si-meta">${s.orderCount} orders • ${s.totalQty} qty • ${s.tickedCount || 0} fulfilled • ${new Date(s.uploadedAt).toLocaleString()}</div>
         </div>
-        <div class="si-arrow">→</div>
+        <div class="si-actions">
+          <button class="si-icon-btn si-download-btn" data-id="${s.id}" title="Download">⬇</button>
+          <button class="si-icon-btn si-delete-btn" data-id="${s.id}" title="Delete">🗑</button>
+          <div class="si-arrow">→</div>
+        </div>
       </div>
     `).join('');
     savedListArea.querySelectorAll('.saved-item').forEach(el => {
       el.addEventListener('click', () => openSheet(el.dataset.id));
+    });
+    savedListArea.querySelectorAll('.si-download-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        downloadSheetById(btn.dataset.id);
+      });
+    });
+    savedListArea.querySelectorAll('.si-delete-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        if(confirm('Delete this sheet for everyone? This cannot be undone.')){
+          deleteSheetById(id, () => loadSavedList());
+        }
+      });
     });
   } catch(err){
     savedListArea.innerHTML = `<div class="error-box">Couldn't load saved sheets: ${err.message}</div>`;
@@ -753,6 +811,7 @@ async function openSheet(id){
     currentSheet = data;
     driveCache = {};
     gridTitle.textContent = data.filename;
+    populateSwitchDropdown(id);
     renderGrid();
   } catch(err){
     gridArea.innerHTML = `<div class="error-box">Couldn't load sheet: ${err.message}</div>`;
@@ -855,227 +914,6 @@ async function toggleFulfilled(idx){
   }
 }
 
-const downloadSheetBtn = document.getElementById('downloadSheetBtn');
-const downloadStatus = document.getElementById('downloadStatus');
-const imageBlobCache = {}; // driveFileId -> { base64, extension }
-
-function setDownloadStatus(msg, kind){
-  if(!msg){ downloadStatus.innerHTML = ''; return; }
-  if(kind==='error'){ downloadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
-  else if(kind==='loading'){ downloadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
-  else { downloadStatus.innerHTML = `<div class="status-line" style="color:var(--green)">${msg}</div>`; }
-}
-
-async function fetchImageAsBase64(fileId){
-  if(imageBlobCache[fileId]) return imageBlobCache[fileId];
-  const res = await fetch(`/api/image?id=${encodeURIComponent(fileId)}`);
-  if(!res.ok) throw new Error('image fetch failed');
-  const blob = await res.blob();
-  const contentType = blob.type || 'image/png';
-  const extension = contentType.includes('png') ? 'png' : (contentType.includes('gif') ? 'gif' : 'jpeg');
-  const base64 = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(',')[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-  const result = { base64, extension };
-  imageBlobCache[fileId] = result;
-  return result;
-}
-
-async function ensureDriveCacheForOrders(orders, onStatus){
-  onStatus && onStatus('Looking up product images…');
-  const uncachedCodes = [...new Set(orders.map(o => o.styleCode))].filter(c => !driveCache[c]);
-  for (let i = 0; i < uncachedCodes.length; i += 5){
-    const batch = uncachedCodes.slice(i, i + 5);
-    await Promise.all(batch.map(async (code) => {
-      try{
-        const data = await callApi('/api/find-image', { styleCode: code });
-        driveCache[code] = data.matches || [];
-      } catch(e){ driveCache[code] = []; }
-    }));
-  }
-}
-
-const pdfImageCache = {}; // driveFileId -> shrunk JPEG data URL, avoids re-resizing repeated style codes
-
-async function shrinkImageForPdf(dataUrl, maxDimPx){
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const w = img.naturalWidth || 1, h = img.naturalHeight || 1;
-      const scale = Math.min(1, maxDimPx / Math.max(w, h));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(w * scale));
-      canvas.height = Math.max(1, Math.round(h * scale));
-      const ctx = canvas.getContext('2d');
-      // flatten onto white first — source PNGs with transparency turn black once forced to JPEG otherwise
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', 0.72));
-    };
-    img.onerror = reject;
-    img.src = dataUrl;
-  });
-}
-
-downloadSheetBtn.addEventListener('click', async () => {
-  if(!currentSheet || !currentSheet.orders || currentSheet.orders.length === 0) return;
-  downloadSheetBtn.disabled = true;
-  try{
-    const orders = currentSheet.orders;
-    await ensureDriveCacheForOrders(orders, (msg) => setDownloadStatus(msg, 'loading'));
-
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Orders');
-    ws.columns = [
-      { header: 'Image', key: 'image', width: 14 },
-      { header: 'Style Code', key: 'styleCode', width: 20 },
-      { header: 'Age', key: 'age', width: 12 },
-      { header: 'Qty', key: 'qty', width: 8 },
-      { header: 'Fulfilled', key: 'fulfilled', width: 12 }
-    ];
-    ws.getRow(1).font = { bold: true };
-
-    let imagesDone = 0;
-    const totalWithImages = orders.filter(o => (driveCache[o.styleCode] || []).length > 0).length;
-
-    for (let i = 0; i < orders.length; i++){
-      const o = orders[i];
-      const rowIndex = i + 2; // header is row 1
-      const row = ws.getRow(rowIndex);
-      row.getCell(2).value = o.styleCode;
-      row.getCell(3).value = o.ageDisplay;
-      row.getCell(4).value = o.qty;
-      row.getCell(5).value = o.fulfilled ? 'Yes' : 'No';
-      row.height = 60;
-
-      const matches = driveCache[o.styleCode] || [];
-      if(matches.length > 0){
-        try{
-          setDownloadStatus(`Embedding images… (${imagesDone + 1}/${totalWithImages})`, 'loading');
-          const { base64, extension } = await fetchImageAsBase64(matches[0].id);
-          const imgId = wb.addImage({ base64: `data:image/${extension};base64,${base64}`, extension });
-          ws.addImage(imgId, { tl: { col: 0, row: rowIndex - 1 }, ext: { width: 70, height: 70 } });
-          imagesDone++;
-        } catch(e){ /* leave the cell blank if a single image fails, don't stop the whole export */ }
-      }
-    }
-
-    setDownloadStatus('Building file…', 'loading');
-    const buffer = await wb.xlsx.writeBuffer();
-    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const safeName = (currentSheet.filename || 'orders').replace(/\.[^.]+$/, '');
-    a.download = `${safeName}-export.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-
-    setDownloadStatus('Downloaded.', 'ok');
-    setTimeout(() => setDownloadStatus('', null), 2500);
-  } catch(err){
-    setDownloadStatus('Download failed: ' + err.message, 'error');
-  } finally {
-    downloadSheetBtn.disabled = false;
-  }
-});
-
-const downloadPdfBtn = document.getElementById('downloadPdfBtn');
-
-downloadPdfBtn.addEventListener('click', async () => {
-  if(!currentSheet || !currentSheet.orders || currentSheet.orders.length === 0) return;
-  downloadPdfBtn.disabled = true;
-  try{
-    const orders = currentSheet.orders;
-    await ensureDriveCacheForOrders(orders, (msg) => setDownloadStatus(msg, 'loading'));
-
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-    const pageWidth = 210, pageHeight = 297, margin = 14;
-    const colImg = margin, colCode = margin + 22, colAge = margin + 92, colQty = margin + 122, colFul = margin + 148;
-    const rowHeight = 20;
-    let y = margin;
-
-    function drawHeaderBlock(){
-      doc.setFont(undefined, 'bold');
-      doc.setFontSize(14);
-      doc.text(currentSheet.filename || 'Order Sheet', margin, y);
-      y += 7;
-      doc.setFontSize(9);
-      doc.setFont(undefined, 'normal');
-      const totalQty = orders.reduce((s, o) => s + (Number(o.qty) || 0), 0);
-      doc.text(`${orders.length} orders  •  ${totalQty} total qty`, margin, y);
-      y += 8;
-      doc.setFont(undefined, 'bold');
-      doc.setFontSize(9);
-      doc.text('Image', colImg, y);
-      doc.text('Style Code', colCode, y);
-      doc.text('Age', colAge, y);
-      doc.text('Qty', colQty, y);
-      doc.text('Fulfilled', colFul, y);
-      y += 3;
-      doc.setDrawColor(180);
-      doc.line(margin, y, pageWidth - margin, y);
-      y += 4;
-      doc.setFont(undefined, 'normal');
-    }
-
-    drawHeaderBlock();
-
-    let imagesDone = 0;
-    const totalWithImages = orders.filter(o => (driveCache[o.styleCode] || []).length > 0).length;
-
-    for (let i = 0; i < orders.length; i++){
-      const o = orders[i];
-      if(y + rowHeight > pageHeight - margin){
-        doc.addPage();
-        y = margin;
-        drawHeaderBlock();
-      }
-
-      const matches = driveCache[o.styleCode] || [];
-      if(matches.length > 0){
-        try{
-          setDownloadStatus(`Building PDF… (${imagesDone + 1}/${totalWithImages})`, 'loading');
-          let pngDataUrl = pdfImageCache[matches[0].id];
-          if(!pngDataUrl){
-            const { base64, extension } = await fetchImageAsBase64(matches[0].id);
-            pngDataUrl = await shrinkImageForPdf(`data:image/${extension};base64,${base64}`, 160);
-            pdfImageCache[matches[0].id] = pngDataUrl;
-          }
-          doc.addImage(pngDataUrl, 'JPEG', colImg, y, 16, 16, undefined, 'FAST');
-          imagesDone++;
-        } catch(e){ /* skip the thumbnail if one image fails, keep going */ }
-      }
-
-      const textY = y + 9;
-      doc.setFontSize(10);
-      doc.text(String(o.styleCode || ''), colCode, textY);
-      doc.text(String(o.ageDisplay || ''), colAge, textY);
-      doc.text(String(o.qty ?? ''), colQty, textY);
-      doc.text(o.fulfilled ? 'Yes' : 'No', colFul, textY);
-
-      y += rowHeight;
-    }
-
-    const safeName = (currentSheet.filename || 'orders').replace(/\.[^.]+$/, '');
-    doc.save(`${safeName}-export.pdf`);
-
-    setDownloadStatus('Downloaded.', 'ok');
-    setTimeout(() => setDownloadStatus('', null), 2500);
-  } catch(err){
-    setDownloadStatus('PDF download failed: ' + err.message, 'error');
-  } finally {
-    downloadPdfBtn.disabled = false;
-  }
-});
-
 // Load the saved-sheets list the first time someone opens this tab
 let sheetTabInitialized = false;
 tabSheet.addEventListener('click', () => {
@@ -1086,42 +924,78 @@ tabSheet.addEventListener('click', () => {
 });
 
 /* ============================================================
-   STICKER GROUPING MODE
+   IMAGE EXPORT MODE
+   Upload a sheet of SKUs -> look up every image for each style
+   code on Drive (folder-first) -> download a sheet with the
+   image links filled in next to each row.
    ============================================================ */
-const stUploadBox = document.getElementById('stUploadBox');
-const stFileInput = document.getElementById('stFileInput');
-const stUploadStatus = document.getElementById('stUploadStatus');
-const stStepUpload = document.getElementById('stStepUpload');
-const stStepGroups = document.getElementById('stStepGroups');
-const stStepDetail = document.getElementById('stStepDetail');
-const stGroupsArea = document.getElementById('stGroupsArea');
-const stSkippedArea = document.getElementById('stSkippedArea');
-const stStatGroups = document.getElementById('stStatGroups');
-const stStatOrders = document.getElementById('stStatOrders');
-const stStatQty = document.getElementById('stStatQty');
-const stBackLink = document.getElementById('stBackLink');
-const stResetLink = document.getElementById('stResetLink');
-const stDetailTitle = document.getElementById('stDetailTitle');
-const stDetailArea = document.getElementById('stDetailArea');
-const stDetailBackLink = document.getElementById('stDetailBackLink');
+const tabExport = document.getElementById('tabExport');
+const exportMode = document.getElementById('exportMode');
+const exStepUpload = document.getElementById('exStepUpload');
+const exUploadBox = document.getElementById('exUploadBox');
+const exFileInput = document.getElementById('exFileInput');
+const exUploadStatus = document.getElementById('exUploadStatus');
+const exStepRun = document.getElementById('exStepRun');
+const exStatRows = document.getElementById('exStatRows');
+const exStatCodes = document.getElementById('exStatCodes');
+const exStatImgs = document.getElementById('exStatImgs');
+const exProgressFill = document.getElementById('exProgressFill');
+const exProgressText = document.getElementById('exProgressText');
+const exDownloadBtn = document.getElementById('exDownloadBtn');
+const exResetLink = document.getElementById('exResetLink');
 
-let stLastGroups = [];
-let stLastItems = null;
-let stPendingReset = false;
+let exOutputRows = null;   // [[sku, link1, link2, ...], ...]
+let exOutputHeader = null;
+let exFilenameBase = 'image_export';
 
-function setStUploadStatus(msg, kind){
-  if(!msg){ stUploadStatus.innerHTML = ''; return; }
-  if(kind==='error'){ stUploadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
-  else if(kind==='loading'){ stUploadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
-  else { stUploadStatus.innerHTML = `<div class="status-line" style="color:var(--green)">${msg}</div>`; }
+tabExport.addEventListener('click', () => {
+  tabScan.classList.remove('active'); tabSheet.classList.remove('active'); tabExport.classList.add('active');
+  scanMode.style.display = 'none'; sheetMode.style.display = 'none'; exportMode.style.display = 'block';
+  headerSub.textContent = 'IMAGE EXPORT';
+  stopScanning();
+});
+tabScan.addEventListener('click', () => { exportMode.style.display = 'none'; });
+tabSheet.addEventListener('click', () => { exportMode.style.display = 'none'; });
+
+function setExUploadStatus(msg, kind){
+  if(!msg){ exUploadStatus.innerHTML = ''; return; }
+  if(kind==='error'){ exUploadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
+  else if(kind==='loading'){ exUploadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
+  else { exUploadStatus.innerHTML = `<div class="status-line" style="color:var(--green)">${msg}</div>`; }
 }
 
-stUploadBox.addEventListener('click', () => stFileInput.click());
+// Reads column A of every sheet. Skips a header cell that doesn't
+// look like a style code (e.g. literally "SKU" or "Sku").
+function parseSkuColumn(workbook){
+  const rows = [];
+  workbook.SheetNames.forEach((sheetName) => {
+    const ws = workbook.Sheets[sheetName];
+    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    aoa.forEach((row) => {
+      const cell = row[0];
+      if(cell === '' || cell === null || cell === undefined) return;
+      const raw = String(cell).trim();
+      if(!raw) return;
+      if(/^sku$/i.test(raw)) return; // header row
+      rows.push(raw);
+    });
+  });
+  return rows;
+}
 
-stFileInput.addEventListener('change', async () => {
-  const file = stFileInput.files[0];
+// "BLPTSW477-23" -> style code "BLPTSW477" (portion before the LAST dash).
+// A SKU with no dash is its own style code.
+function styleCodeFromSku(raw){
+  const dashIdx = raw.lastIndexOf('-');
+  if(dashIdx === -1) return raw;
+  return raw.slice(0, dashIdx).replace(/-+$/, '');
+}
+
+exUploadBox.addEventListener('click', () => {}); // label already opens the file picker
+exFileInput.addEventListener('change', async () => {
+  const file = exFileInput.files[0];
   if(!file) return;
-  setStUploadStatus('Reading sheet…', 'loading');
+  setExUploadStatus('Reading sheet…', 'loading');
   try{
     let workbook;
     if(/\.csv$/i.test(file.name)){
@@ -1131,298 +1005,102 @@ stFileInput.addEventListener('change', async () => {
       const buf = await file.arrayBuffer();
       workbook = XLSX.read(buf, { type: 'array' });
     }
-    const parsedOrders = parseWorkbook(workbook);
-    if(parsedOrders.length === 0){
-      setStUploadStatus("Couldn't find any style codes in that file — check it matches the expected format.", 'error');
+
+    const skus = parseSkuColumn(workbook);
+    if(skus.length === 0){
+      setExUploadStatus('No SKUs found in the first column of that sheet.', 'error');
       return;
     }
-    const items = parsedOrders.map(o => ({ styleCode: o.styleCode, age: o.ageDisplay, qty: o.qty }));
-    stLastItems = items;
-    const doReset = stPendingReset;
-    stPendingReset = false;
-    await runStickerScan(items, doReset);
+
+    exFilenameBase = file.name.replace(/\.(xlsx|xls|csv)$/i, '');
+    setExUploadStatus('', null);
+    await runImageExport(skus);
   } catch(err){
-    setStUploadStatus('Failed: ' + err.message, 'error');
-  } finally {
-    stFileInput.value = '';
+    setExUploadStatus('Could not read that file: ' + err.message, 'error');
   }
+  exFileInput.value = '';
 });
 
-stResetLink.addEventListener('click', async () => {
-  if(!confirm('This clears every sticker match learned so far (for all style codes, not just this sheet) and re-scans from scratch. Continue?')) return;
-  if(stLastItems){
-    await runStickerScan(stLastItems, true);
-  } else {
-    stPendingReset = true;
-    stFileInput.click();
-  }
-});
+async function runImageExport(skus){
+  exStepUpload.style.display = 'none';
+  exStepRun.style.display = 'block';
+  exDownloadBtn.style.display = 'none';
 
-async function runStickerScan(items, resetCache){
-  let round = 1;
-  let result = null;
-  while(round <= 15){
-    setStUploadStatus(`Scanning images for stickers… (pass ${round}${round>1 ? ', matching remaining style codes':''})`, 'loading');
-    result = await callApi('/api/sticker-scan', { items, resetCache: resetCache && round === 1 });
-    if(!result.remainingUnknown || result.remainingUnknown <= 0) break;
-    round++;
-  }
-  setStUploadStatus('', null);
-  stLastGroups = result.groups || [];
-  renderStGroups(result);
-}
+  const uniqueCodes = [...new Set(skus.map(styleCodeFromSku))];
+  exStatRows.textContent = skus.length;
+  exStatCodes.textContent = uniqueCodes.length;
+  exStatImgs.textContent = '0';
+  exProgressFill.style.width = '10%';
+  exProgressText.textContent = `Looking up ${uniqueCodes.length} style code(s) on Drive…`;
 
-function renderStGroups(result){
-  const groups = result.groups || [];
-  const orderCount = groups.reduce((s,g) => s + g.orderCount, 0);
-  const totalQty = groups.reduce((s,g) => s + g.totalQty, 0);
-  stStatGroups.textContent = groups.length;
-  stStatOrders.textContent = orderCount;
-  stStatQty.textContent = totalQty;
-
-  if(groups.length === 0){
-    stGroupsArea.innerHTML = `<div class="status-line">No sticker-based style codes (starting "BLP") found in this sheet.</div>`;
-  } else {
-    stGroupsArea.innerHTML = groups.map((g, i) => `
-      <div class="stk-card" data-index="${i}">
-        <div class="stk-thumb">${g.driveFileId ? `<img src="/api/image?id=${encodeURIComponent(g.driveFileId)}" alt="${g.label}">` : ''}</div>
-        <div class="stk-info">
-          <div class="stk-label">${g.label}</div>
-          <div class="stk-meta"><span><b>${g.orderCount}</b> orders</span><span><b>${g.totalQty}</b> qty</span></div>
-        </div>
-        <div class="stk-arrow">→</div>
-      </div>
-    `).join('');
-    stGroupsArea.querySelectorAll('.stk-card').forEach(el => {
-      el.addEventListener('click', () => openStDetail(Number(el.dataset.index)));
-    });
-  }
-
-  const skippedCount = (result.skipped || []).length;
-  const noImage = result.noImage || [];
-  let note = '';
-  if(result.scanWarning) note += `<div class="stk-note" style="color:var(--red);">${result.scanWarning}</div>`;
-  if(skippedCount > 0) note += `<div class="stk-note"><b>${skippedCount}</b> readymade line(s) (style code not starting "BLP") skipped — no sticker needed.</div>`;
-  if(noImage.length > 0) note += `<div class="stk-note"><b>${noImage.length}</b> style code(s) had no matching image in Drive, so couldn't be grouped: ${noImage.slice(0,12).join(', ')}${noImage.length>12 ? '…' : ''}</div>`;
-  stSkippedArea.innerHTML = note;
-
-  stStepUpload.style.display = 'none';
-  stStepGroups.style.display = 'block';
-  stStepDetail.style.display = 'none';
-}
-
-function openStDetail(index){
-  const g = stLastGroups[index];
-  if(!g) return;
-  stDetailTitle.textContent = g.label;
-  stDetailArea.innerHTML = `
-    <div class="stk-card" style="cursor:default;margin-bottom:14px;">
-      <div class="stk-thumb" style="width:56px;height:56px;">${g.driveFileId ? `<img src="/api/image?id=${encodeURIComponent(g.driveFileId)}" alt="${g.label}">` : ''}</div>
-      <div class="stk-info">
-        <div class="stk-label">${g.orderCount} orders • ${g.totalQty} total qty</div>
-      </div>
-    </div>
-  ` + g.orders.map(o => `
-    <div class="stk-row">
-      <div>
-        <div class="code">${o.styleCode}</div>
-        <div class="sub">Age ${o.age || '—'}</div>
-      </div>
-      <div style="margin-left:auto;font-family:var(--mono);font-size:14px;color:var(--amber);font-weight:700;">Qty ${o.qty}</div>
-    </div>
-  `).join('');
-  stStepGroups.style.display = 'none';
-  stStepDetail.style.display = 'block';
-}
-
-stDetailBackLink.addEventListener('click', () => {
-  stStepDetail.style.display = 'none';
-  stStepGroups.style.display = 'block';
-});
-
-stBackLink.addEventListener('click', () => {
-  stStepGroups.style.display = 'none';
-  stStepDetail.style.display = 'none';
-  stStepUpload.style.display = 'block';
-  setStUploadStatus('', null);
-});
-
-/* ============================================================
-   PHOTO LIST MODE
-   ============================================================ */
-const phUploadBox = document.getElementById('phUploadBox');
-const phFileInput = document.getElementById('phFileInput');
-const phUploadStatus = document.getElementById('phUploadStatus');
-const phStepUpload = document.getElementById('phStepUpload');
-const phStepGrid = document.getElementById('phStepGrid');
-const phGridArea = document.getElementById('phGridArea');
-const phNoImageArea = document.getElementById('phNoImageArea');
-const phStatTotal = document.getElementById('phStatTotal');
-const phStatRemaining = document.getElementById('phStatRemaining');
-const phStatRemoved = document.getElementById('phStatRemoved');
-const phDownloadBtn = document.getElementById('phDownloadBtn');
-const phDownloadStatus = document.getElementById('phDownloadStatus');
-const phBackLink = document.getElementById('phBackLink');
-
-let phItems = [];     // { styleCode, fileId, removed }
-let phNoImage = [];   // style codes with no Drive match
-
-function setPhUploadStatus(msg, kind){
-  if(!msg){ phUploadStatus.innerHTML = ''; return; }
-  if(kind==='error'){ phUploadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
-  else { phUploadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
-}
-
-function setPhDownloadStatus(msg, kind){
-  if(!msg){ phDownloadStatus.innerHTML = ''; return; }
-  if(kind==='error'){ phDownloadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
-  else if(kind==='loading'){ phDownloadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
-  else { phDownloadStatus.innerHTML = `<div class="status-line" style="color:var(--green)">${msg}</div>`; }
-}
-
-phUploadBox.addEventListener('click', () => phFileInput.click());
-
-phFileInput.addEventListener('change', async () => {
-  const file = phFileInput.files[0];
-  if(!file) return;
-  setPhUploadStatus('Reading sheet…');
+  let results = {};
   try{
-    let workbook;
-    if(/\.csv$/i.test(file.name)){
-      const text = await file.text();
-      workbook = XLSX.read(text, { type: 'string' });
-    } else {
-      const buf = await file.arrayBuffer();
-      workbook = XLSX.read(buf, { type: 'array' });
-    }
-    const parsedOrders = parseWorkbook(workbook);
-    if(parsedOrders.length === 0){
-      setPhUploadStatus("Couldn't find any style codes in that file — check it matches the expected format.", 'error');
-      return;
-    }
-    const uniqueCodes = [...new Set(parsedOrders.map(o => o.styleCode))];
-    setPhUploadStatus(`Looking up ${uniqueCodes.length} product photo(s)…`);
-    await ensureDriveCacheForOrders(uniqueCodes.map(styleCode => ({ styleCode })), (msg) => setPhUploadStatus(msg));
-
-    phItems = [];
-    phNoImage = [];
-    uniqueCodes.forEach(code => {
-      const matches = driveCache[code] || [];
-      if(matches.length > 0){
-        phItems.push({ styleCode: code, fileId: matches[0].id, removed: false });
-      } else {
-        phNoImage.push(code);
-      }
+    const res = await fetch('/api/bulk-images', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ styleCodes: uniqueCodes })
     });
-
-    setPhUploadStatus('');
-    renderPhGrid();
-    phStepUpload.style.display = 'none';
-    phStepGrid.style.display = 'block';
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Lookup failed');
+    results = data.results || {};
   } catch(err){
-    setPhUploadStatus('Failed: ' + err.message, 'error');
-  } finally {
-    phFileInput.value = '';
+    exProgressText.textContent = '';
+    exUploadStatus.innerHTML = '';
+    exStepRun.style.display = 'none';
+    exStepUpload.style.display = 'block';
+    setExUploadStatus('Drive lookup failed: ' + err.message, 'error');
+    return;
   }
-});
 
-function renderPhGrid(){
-  const remaining = phItems.filter(it => !it.removed);
-  const removedCount = phItems.length - remaining.length;
-  phStatTotal.textContent = phItems.length;
-  phStatRemaining.textContent = remaining.length;
-  phStatRemoved.textContent = removedCount;
+  exProgressFill.style.width = '80%';
 
-  phGridArea.innerHTML = phItems.map((it, i) => `
-    <div class="grid-card ${it.removed ? 'removed' : ''}" data-index="${i}">
-      <div class="gc-image" data-style="${it.styleCode}">
-        <img src="/api/image?id=${encodeURIComponent(it.fileId)}" alt="${it.styleCode}" loading="lazy">
-        <button class="gc-remove-btn" data-index="${i}" title="Remove">✕</button>
-      </div>
-      <div class="gc-tags"><div class="gc-code">${it.styleCode}</div></div>
-    </div>
-  `).join('');
+  // Build one row per original SKU, reusing each style code's image
+  // list for every age-group row that shares it (no recomputation).
+  let maxImages = 0;
+  let totalImages = 0;
+  const rows = skus.map((sku) => {
+    const code = styleCodeFromSku(sku);
+    const entry = results[code] || { images: [] };
+    const links = entry.images.map((f) => `${location.origin}/api/image?id=${encodeURIComponent(f.id)}`);
+    maxImages = Math.max(maxImages, links.length);
+    totalImages += links.length;
+    return [code, ...links];
+  });
 
-  phNoImageArea.innerHTML = phNoImage.length > 0
-    ? `<div class="stk-note"><b>${phNoImage.length}</b> style code(s) had no matching image in Drive: ${phNoImage.slice(0,12).join(', ')}${phNoImage.length>12 ? '…' : ''}</div>`
-    : '';
+  const header = ['Style Code', ...Array.from({ length: maxImages }, (_, i) => String.fromCharCode(97 + i))];
+  exOutputRows = rows;
+  exOutputHeader = header;
+
+  exStatImgs.textContent = totalImages;
+  exProgressFill.style.width = '100%';
+  exProgressText.textContent = `Done — ${uniqueCodes.length} style code(s), ${totalImages} image link(s) placed.`;
+  exDownloadBtn.style.display = 'block';
 }
 
-phGridArea.addEventListener('click', (e) => {
-  const btn = e.target.closest('.gc-remove-btn');
-  if(!btn) return;
-  const idx = Number(btn.dataset.index);
-  if(phItems[idx]){
-    phItems[idx].removed = true;
-    renderPhGrid();
-  }
+exDownloadBtn.addEventListener('click', () => {
+  if(!exOutputRows) return;
+  const ws = XLSX.utils.aoa_to_sheet([exOutputHeader, ...exOutputRows]);
+
+  // Make each link cell an actual clickable hyperlink, not just text.
+  exOutputRows.forEach((row, r) => {
+    for(let c = 1; c < row.length; c++){
+      const url = row[c];
+      if(!url) continue;
+      const addr = XLSX.utils.encode_cell({ r: r + 1, c });
+      if(ws[addr]) ws[addr].l = { Target: url };
+    }
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Images');
+  XLSX.writeFile(wb, exFilenameBase + '_images.xlsx');
 });
 
-phBackLink.addEventListener('click', () => {
-  phStepGrid.style.display = 'none';
-  phStepUpload.style.display = 'block';
-  setPhUploadStatus('');
-  setPhDownloadStatus('');
-});
-
-phDownloadBtn.addEventListener('click', async () => {
-  const remaining = phItems.filter(it => !it.removed);
-  if(remaining.length === 0){ setPhDownloadStatus('Nothing left to download — every photo was removed.', 'error'); return; }
-  phDownloadBtn.disabled = true;
-  try{
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-    const pageWidth = 210, pageHeight = 297, margin = 14;
-    const imgSize = 26;
-    const rowHeight = imgSize + 8;
-    let y = margin;
-
-    function drawHeader(){
-      doc.setFont(undefined, 'bold');
-      doc.setFontSize(14);
-      doc.text('Photo List', margin, y);
-      y += 6;
-      doc.setFont(undefined, 'normal');
-      doc.setFontSize(9);
-      doc.text(`${remaining.length} photo(s)`, margin, y);
-      y += 6;
-    }
-    drawHeader();
-
-    for (let i = 0; i < remaining.length; i++){
-      const it = remaining[i];
-      if(y + rowHeight > pageHeight - margin){
-        doc.addPage();
-        y = margin;
-        drawHeader();
-      }
-      try{
-        setPhDownloadStatus(`Building PDF… (${i + 1}/${remaining.length})`, 'loading');
-        let imgDataUrl = pdfImageCache[it.fileId];
-        if(!imgDataUrl){
-          const { base64, extension } = await fetchImageAsBase64(it.fileId);
-          imgDataUrl = await shrinkImageForPdf(`data:image/${extension};base64,${base64}`, 260);
-          pdfImageCache[it.fileId] = imgDataUrl;
-        }
-        doc.addImage(imgDataUrl, 'JPEG', margin, y, imgSize, imgSize, undefined, 'FAST');
-      } catch(e){ /* skip this thumbnail, keep the row's text */ }
-
-      doc.setFontSize(12);
-      doc.setFont(undefined, 'bold');
-      doc.text(String(it.styleCode || ''), margin + imgSize + 8, y + imgSize / 2 + 3);
-      doc.setFont(undefined, 'normal');
-
-      y += rowHeight;
-    }
-
-    doc.save('photo-list.pdf');
-    setPhDownloadStatus('Downloaded.', 'ok');
-    setTimeout(() => setPhDownloadStatus(''), 2500);
-  } catch(err){
-    setPhDownloadStatus('Download failed: ' + err.message, 'error');
-  } finally {
-    phDownloadBtn.disabled = false;
-  }
+exResetLink.addEventListener('click', () => {
+  exOutputRows = null;
+  exStepRun.style.display = 'none';
+  exStepUpload.style.display = 'block';
+  setExUploadStatus('', null);
 });
 </script>
 </body>
