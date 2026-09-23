@@ -71,6 +71,10 @@
   .status-line .spin{width:11px;height:11px;border:2px solid var(--line);border-top-color:var(--amber);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0;}
   @keyframes spin{to{transform:rotate(360deg);}}
   .error-box{border:1px solid var(--red);background:rgba(255,92,92,.08);color:#ffb3b3;font-size:12.5px;padding:10px 12px;border-radius:2px;margin-top:10px;font-family:var(--mono);line-height:1.5;}
+  .warn-box{border:1px solid var(--amber);background:rgba(255,157,47,.08);color:#ffd39b;font-size:12.5px;padding:10px 12px;border-radius:2px;margin-top:10px;font-family:var(--mono);line-height:1.5;}
+  .warn-box .warn-title{color:var(--amber);font-weight:700;margin-bottom:6px;}
+  .warn-box ul{margin:0;padding-left:18px;max-height:160px;overflow:auto;}
+  .warn-box li{margin-bottom:3px;}
 
   .result-card{border:1px solid var(--line);border-radius:2px;overflow:hidden;margin-top:12px;background:var(--panel-2);}
   .result-card .frame-wrap{aspect-ratio:1/1;background:#000;display:flex;align-items:center;justify-content:center;}
@@ -269,6 +273,7 @@
       </div>
       <div class="progress-bar-track"><div class="progress-bar-fill" id="exProgressFill"></div></div>
       <div class="progress-text" id="exProgressText"></div>
+      <div id="exWarningBox"></div>
       <button class="btn btn-primary" id="exDownloadBtn" style="display:none;">⬇ Download result sheet</button>
       <div class="link-btn" id="exResetLink">← Upload a different sheet</div>
     </div>
@@ -943,6 +948,7 @@ const exProgressFill = document.getElementById('exProgressFill');
 const exProgressText = document.getElementById('exProgressText');
 const exDownloadBtn = document.getElementById('exDownloadBtn');
 const exResetLink = document.getElementById('exResetLink');
+const exWarningBox = document.getElementById('exWarningBox');
 
 let exOutputRows = null;   // [[sku, link1, link2, ...], ...]
 let exOutputHeader = null;
@@ -1025,6 +1031,7 @@ async function runImageExport(skus){
   exStepUpload.style.display = 'none';
   exStepRun.style.display = 'block';
   exDownloadBtn.style.display = 'none';
+  exWarningBox.innerHTML = '';
 
   const uniqueCodes = [...new Set(skus.map(styleCodeFromSku))];
   exStatRows.textContent = skus.length;
@@ -1056,12 +1063,21 @@ async function runImageExport(skus){
 
   // Build one row per original SKU, reusing each style code's image
   // list for every age-group row that shares it (no recomputation).
+  // A code with no Drive match keeps its row — just with empty image
+  // cells — and gets listed in the warning box below instead of being
+  // silently dropped or filled with an unrelated image.
   let maxImages = 0;
   let totalImages = 0;
+  const unresolved = []; // [{code, reason}]
+  const seenUnresolved = new Set();
   const rows = skus.map((sku) => {
     const code = styleCodeFromSku(sku);
-    const entry = results[code] || { images: [] };
+    const entry = results[code] || { images: [], note: 'No result returned for this code.' };
     const links = entry.images.map((f) => `${location.origin}/api/image?id=${encodeURIComponent(f.id)}`);
+    if (links.length === 0 && !seenUnresolved.has(code)) {
+      seenUnresolved.add(code);
+      unresolved.push({ code, reason: entry.error || entry.note || 'No images found.' });
+    }
     maxImages = Math.max(maxImages, links.length);
     totalImages += links.length;
     return [code, ...links];
@@ -1074,6 +1090,17 @@ async function runImageExport(skus){
   exStatImgs.textContent = totalImages;
   exProgressFill.style.width = '100%';
   exProgressText.textContent = `Done — ${uniqueCodes.length} style code(s), ${totalImages} image link(s) placed.`;
+
+  if (unresolved.length) {
+    exWarningBox.innerHTML = `
+      <div class="warn-box">
+        <div class="warn-title">⚠ ${unresolved.length} of ${uniqueCodes.length} style code(s) had nothing on Drive — their rows were left blank:</div>
+        <ul>${unresolved.map((u) => `<li><b>${u.code}</b> — ${u.reason}</li>`).join('')}</ul>
+      </div>`;
+  } else {
+    exWarningBox.innerHTML = '';
+  }
+
   exDownloadBtn.style.display = 'block';
 }
 
