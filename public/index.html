@@ -71,10 +71,6 @@
   .status-line .spin{width:11px;height:11px;border:2px solid var(--line);border-top-color:var(--amber);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0;}
   @keyframes spin{to{transform:rotate(360deg);}}
   .error-box{border:1px solid var(--red);background:rgba(255,92,92,.08);color:#ffb3b3;font-size:12.5px;padding:10px 12px;border-radius:2px;margin-top:10px;font-family:var(--mono);line-height:1.5;}
-  .warn-box{border:1px solid var(--amber);background:rgba(255,157,47,.08);color:#ffd39b;font-size:12.5px;padding:10px 12px;border-radius:2px;margin-top:10px;font-family:var(--mono);line-height:1.5;}
-  .warn-box .warn-title{color:var(--amber);font-weight:700;margin-bottom:6px;}
-  .warn-box ul{margin:0;padding-left:18px;max-height:160px;overflow:auto;}
-  .warn-box li{margin-bottom:3px;}
 
   .result-card{border:1px solid var(--line);border-radius:2px;overflow:hidden;margin-top:12px;background:var(--panel-2);}
   .result-card .frame-wrap{aspect-ratio:1/1;background:#000;display:flex;align-items:center;justify-content:center;}
@@ -174,7 +170,6 @@
   <div class="mode-tabs">
     <button class="mode-tab active" id="tabScan">Scan Invoice</button>
     <button class="mode-tab" id="tabSheet">Order Sheet</button>
-    <button class="mode-tab" id="tabExport">Image Export</button>
   </div>
 
   <!-- =============== SCAN MODE =============== -->
@@ -246,36 +241,6 @@
       <div id="gridArea" class="order-grid"></div>
       <div class="link-btn" id="refreshGridLink">↻ Refresh from server</div>
       <div class="link-btn" id="backToListLink2">← Back to saved sheets</div>
-    </div>
-
-  </div>
-
-  <!-- =============== IMAGE EXPORT MODE =============== -->
-  <div id="exportMode" style="display:none;">
-
-    <div class="step" id="exStepUpload">
-      <div class="step-label"><span class="num">1</span> Upload SKU sheet</div>
-      <label class="upload-box" id="exUploadBox" for="exFileInput">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M12 3v12m0-12l-4 4m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
-        <div class="cta">Tap to upload .xlsx or .csv</div>
-        <div class="hint">First column = SKU (style code + "-" + age group). One row per SKU.</div>
-      </label>
-      <input type="file" id="exFileInput" accept=".xlsx,.xls,.csv" style="display:none;">
-      <div id="exUploadStatus"></div>
-    </div>
-
-    <div class="step" id="exStepRun" style="display:none;">
-      <div class="step-label"><span class="num">2</span> Fetch images from Drive</div>
-      <div class="stats-row">
-        <div class="stat-box"><div class="n" id="exStatRows">0</div><div class="l">SKU rows</div></div>
-        <div class="stat-box"><div class="n" id="exStatCodes">0</div><div class="l">Unique styles</div></div>
-        <div class="stat-box"><div class="n" id="exStatImgs">0</div><div class="l">Images found</div></div>
-      </div>
-      <div class="progress-bar-track"><div class="progress-bar-fill" id="exProgressFill"></div></div>
-      <div class="progress-text" id="exProgressText"></div>
-      <div id="exWarningBox"></div>
-      <button class="btn btn-primary" id="exDownloadBtn" style="display:none;">⬇ Download result sheet</button>
-      <div class="link-btn" id="exResetLink">← Upload a different sheet</div>
     </div>
 
   </div>
@@ -926,208 +891,6 @@ tabSheet.addEventListener('click', () => {
     sheetTabInitialized = true;
     showSavedList();
   }
-});
-
-/* ============================================================
-   IMAGE EXPORT MODE
-   Upload a sheet of SKUs -> look up every image for each style
-   code on Drive (folder-first) -> download a sheet with the
-   image links filled in next to each row.
-   ============================================================ */
-const tabExport = document.getElementById('tabExport');
-const exportMode = document.getElementById('exportMode');
-const exStepUpload = document.getElementById('exStepUpload');
-const exUploadBox = document.getElementById('exUploadBox');
-const exFileInput = document.getElementById('exFileInput');
-const exUploadStatus = document.getElementById('exUploadStatus');
-const exStepRun = document.getElementById('exStepRun');
-const exStatRows = document.getElementById('exStatRows');
-const exStatCodes = document.getElementById('exStatCodes');
-const exStatImgs = document.getElementById('exStatImgs');
-const exProgressFill = document.getElementById('exProgressFill');
-const exProgressText = document.getElementById('exProgressText');
-const exDownloadBtn = document.getElementById('exDownloadBtn');
-const exResetLink = document.getElementById('exResetLink');
-const exWarningBox = document.getElementById('exWarningBox');
-
-let exOutputRows = null;   // [[sku, link1, link2, ...], ...]
-let exOutputHeader = null;
-let exFilenameBase = 'image_export';
-
-tabExport.addEventListener('click', () => {
-  tabScan.classList.remove('active'); tabSheet.classList.remove('active'); tabExport.classList.add('active');
-  scanMode.style.display = 'none'; sheetMode.style.display = 'none'; exportMode.style.display = 'block';
-  headerSub.textContent = 'IMAGE EXPORT';
-  stopScanning();
-});
-tabScan.addEventListener('click', () => { exportMode.style.display = 'none'; });
-tabSheet.addEventListener('click', () => { exportMode.style.display = 'none'; });
-
-function setExUploadStatus(msg, kind){
-  if(!msg){ exUploadStatus.innerHTML = ''; return; }
-  if(kind==='error'){ exUploadStatus.innerHTML = `<div class="error-box">${msg}</div>`; }
-  else if(kind==='loading'){ exUploadStatus.innerHTML = `<div class="status-line"><span class="spin"></span>${msg}</div>`; }
-  else { exUploadStatus.innerHTML = `<div class="status-line" style="color:var(--green)">${msg}</div>`; }
-}
-
-// Reads column A of every sheet. Skips a header cell that doesn't
-// look like a style code (e.g. literally "SKU" or "Sku").
-function parseSkuColumn(workbook){
-  const rows = [];
-  workbook.SheetNames.forEach((sheetName) => {
-    const ws = workbook.Sheets[sheetName];
-    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-    aoa.forEach((row) => {
-      const cell = row[0];
-      if(cell === '' || cell === null || cell === undefined) return;
-      const raw = String(cell).trim();
-      if(!raw) return;
-      if(/^sku$/i.test(raw)) return; // header row
-      rows.push(raw);
-    });
-  });
-  return rows;
-}
-
-// "BLPTSW477-23" -> style code "BLPTSW477" (portion before the LAST dash).
-// A SKU with no dash is its own style code.
-function styleCodeFromSku(raw){
-  const dashIdx = raw.lastIndexOf('-');
-  if(dashIdx === -1) return raw;
-  return raw.slice(0, dashIdx).replace(/-+$/, '');
-}
-
-exUploadBox.addEventListener('click', () => {}); // label already opens the file picker
-exFileInput.addEventListener('change', async () => {
-  const file = exFileInput.files[0];
-  if(!file) return;
-  setExUploadStatus('Reading sheet…', 'loading');
-  try{
-    let workbook;
-    if(/\.csv$/i.test(file.name)){
-      const text = await file.text();
-      workbook = XLSX.read(text, { type: 'string' });
-    } else {
-      const buf = await file.arrayBuffer();
-      workbook = XLSX.read(buf, { type: 'array' });
-    }
-
-    const skus = parseSkuColumn(workbook);
-    if(skus.length === 0){
-      setExUploadStatus('No SKUs found in the first column of that sheet.', 'error');
-      return;
-    }
-
-    exFilenameBase = file.name.replace(/\.(xlsx|xls|csv)$/i, '');
-    setExUploadStatus('', null);
-    await runImageExport(skus);
-  } catch(err){
-    setExUploadStatus('Could not read that file: ' + err.message, 'error');
-  }
-  exFileInput.value = '';
-});
-
-async function runImageExport(skus){
-  exStepUpload.style.display = 'none';
-  exStepRun.style.display = 'block';
-  exDownloadBtn.style.display = 'none';
-  exWarningBox.innerHTML = '';
-
-  const uniqueCodes = [...new Set(skus.map(styleCodeFromSku))];
-  exStatRows.textContent = skus.length;
-  exStatCodes.textContent = uniqueCodes.length;
-  exStatImgs.textContent = '0';
-  exProgressFill.style.width = '10%';
-  exProgressText.textContent = `Looking up ${uniqueCodes.length} style code(s) on Drive…`;
-
-  let results = {};
-  try{
-    const res = await fetch('/api/bulk-images', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ styleCodes: uniqueCodes })
-    });
-    const data = await res.json();
-    if(!res.ok) throw new Error(data.error || 'Lookup failed');
-    results = data.results || {};
-  } catch(err){
-    exProgressText.textContent = '';
-    exUploadStatus.innerHTML = '';
-    exStepRun.style.display = 'none';
-    exStepUpload.style.display = 'block';
-    setExUploadStatus('Drive lookup failed: ' + err.message, 'error');
-    return;
-  }
-
-  exProgressFill.style.width = '80%';
-
-  // Build one row per original SKU, reusing each style code's image
-  // list for every age-group row that shares it (no recomputation).
-  // A code with no Drive match keeps its row — just with empty image
-  // cells — and gets listed in the warning box below instead of being
-  // silently dropped or filled with an unrelated image.
-  let maxImages = 0;
-  let totalImages = 0;
-  const unresolved = []; // [{code, reason}]
-  const seenUnresolved = new Set();
-  const rows = skus.map((sku) => {
-    const code = styleCodeFromSku(sku);
-    const entry = results[code] || { images: [], note: 'No result returned for this code.' };
-    const links = entry.images.map((f) => `${location.origin}/api/image?id=${encodeURIComponent(f.id)}`);
-    if (links.length === 0 && !seenUnresolved.has(code)) {
-      seenUnresolved.add(code);
-      unresolved.push({ code, reason: entry.error || entry.note || 'No images found.' });
-    }
-    maxImages = Math.max(maxImages, links.length);
-    totalImages += links.length;
-    return [code, ...links];
-  });
-
-  const header = ['Style Code', ...Array.from({ length: maxImages }, (_, i) => String.fromCharCode(97 + i))];
-  exOutputRows = rows;
-  exOutputHeader = header;
-
-  exStatImgs.textContent = totalImages;
-  exProgressFill.style.width = '100%';
-  exProgressText.textContent = `Done — ${uniqueCodes.length} style code(s), ${totalImages} image link(s) placed.`;
-
-  if (unresolved.length) {
-    exWarningBox.innerHTML = `
-      <div class="warn-box">
-        <div class="warn-title">⚠ ${unresolved.length} of ${uniqueCodes.length} style code(s) had nothing on Drive — their rows were left blank:</div>
-        <ul>${unresolved.map((u) => `<li><b>${u.code}</b> — ${u.reason}</li>`).join('')}</ul>
-      </div>`;
-  } else {
-    exWarningBox.innerHTML = '';
-  }
-
-  exDownloadBtn.style.display = 'block';
-}
-
-exDownloadBtn.addEventListener('click', () => {
-  if(!exOutputRows) return;
-  const ws = XLSX.utils.aoa_to_sheet([exOutputHeader, ...exOutputRows]);
-
-  // Make each link cell an actual clickable hyperlink, not just text.
-  exOutputRows.forEach((row, r) => {
-    for(let c = 1; c < row.length; c++){
-      const url = row[c];
-      if(!url) continue;
-      const addr = XLSX.utils.encode_cell({ r: r + 1, c });
-      if(ws[addr]) ws[addr].l = { Target: url };
-    }
-  });
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Images');
-  XLSX.writeFile(wb, exFilenameBase + '_images.xlsx');
-});
-
-exResetLink.addEventListener('click', () => {
-  exOutputRows = null;
-  exStepRun.style.display = 'none';
-  exStepUpload.style.display = 'block';
-  setExUploadStatus('', null);
 });
 </script>
 </body>
